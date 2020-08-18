@@ -1,0 +1,10 @@
+[package]
+name = "bs1770"
+version = "0.0.0"
+authors = ["Ruud van Asseldonk <dev@veniogames.com>"]
+edition = "2018"
+license = "Apache-2.0"
+
+[dev-dependencies]
+claxon = "0.4.3"
+hound = "3.4.0"
