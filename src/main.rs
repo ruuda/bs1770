@@ -14,7 +14,7 @@ fn analyze_file(fname: &str) -> claxon::Result<()> {
     let mut samples = Vec::new();
 
     let streaminfo = reader.streaminfo();
-    let max_amplitude = 1.0 / ((1_u64 << streaminfo.bits_per_sample) - 1) as f32;
+    let normalizer = 1.0 / ((1_u64 << streaminfo.bits_per_sample) - 1) as f32;
 
     let mut blocks = reader.blocks();
     let mut buffer = Vec::new();
@@ -22,7 +22,7 @@ fn analyze_file(fname: &str) -> claxon::Result<()> {
     while let Some(block) = blocks.read_next_or_eof(buffer)? {
         let left = block.channel(0);
         for sample in block.channel(0) {
-            samples.push(*sample as f32 / max_amplitude);
+            samples.push(*sample as f32 * normalizer);
         }
         buffer = block.into_buffer();
     }

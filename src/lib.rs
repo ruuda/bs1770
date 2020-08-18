@@ -67,6 +67,7 @@ impl Filter {
         output.push(0.0);
         output.push(0.0);
         for i in 2..input.len() {
+            debug_assert!(input[i].abs() <= 1.0 + 1e-5, "Input too large: {}", input[i]);
             let output_i = 0.0
                 + self.b0 * input[i]
                 + self.b1 * input[i - 1]
