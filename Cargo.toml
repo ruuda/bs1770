@@ -5,6 +5,16 @@ authors = ["Ruud van Asseldonk <dev@veniogames.com>"]
 edition = "2018"
 license = "Apache-2.0"
 
-[dev-dependencies]
+# TODO: Turn into dev dependencies, turn main into example.
+[dependencies]
 claxon = "0.4.3"
 hound = "3.4.0"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+# If we use parallel codegen, Claxon does not get optimized properly,
+# and the result will be slow, so disable parallel codegen.
+codegen-units = 1
