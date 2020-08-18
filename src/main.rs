@@ -11,34 +11,33 @@ extern crate hound;
 
 fn analyze_file(fname: &str) -> claxon::Result<()> {
     let mut reader = claxon::FlacReader::open(fname)?;
-    let mut samples = Vec::new();
 
     let streaminfo = reader.streaminfo();
     let normalizer = 1.0 / ((1_u64 << streaminfo.bits_per_sample) - 1) as f32;
 
+    let mut meters = vec![
+        bs1770::ChannelLoudnessMeter::new(streaminfo.sample_rate);
+        streaminfo.channels as usize
+    ];
+
     let mut blocks = reader.blocks();
     let mut buffer = Vec::new();
 
+    let mut k = 0;
+
     while let Some(block) = blocks.read_next_or_eof(buffer)? {
-        let left = block.channel(0);
-        for sample in block.channel(0) {
-            samples.push(*sample as f32 * normalizer);
+        for (ch, meter) in meters.iter_mut().enumerate() {
+            meter.push(block.channel(ch as u32).iter().map(|s| *s as f32 * normalizer));
         }
         buffer = block.into_buffer();
-    }
 
-    let meter = bs1770::LoudnessMeter::new(streaminfo.sample_rate);
-
-    let filtered = meter.get_k_weighted_rms(&samples);
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: streaminfo.sample_rate,
-        bits_per_sample: 32,
-        sample_format: hound::SampleFormat::Float,
-    };
-    let mut writer = hound::WavWriter::create("test.wav", spec).unwrap();
-    for s in &filtered {
-        writer.write_sample(*s).unwrap();
+        for i in k..meters[0].square_sum_windows.len() {
+            for meter in meters.iter() {
+                print!("{:6.2} ", meter.square_sum_windows[i]);
+            }
+            println!("");
+        }
+        k = meters[0].square_sum_windows.len();
     }
 
     Ok(())

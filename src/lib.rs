@@ -10,12 +10,19 @@ use std::f32;
 /// Coefficients for a 2nd-degree infinite impulse response filter.
 ///
 /// Coefficient a0 is implicitly 1.0.
+#[derive(Clone)]
 struct Filter {
     a1: f32,
     a2: f32,
     b0: f32,
     b1: f32,
     b2: f32,
+
+    // The past two input and output samples.
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
 }
 
 impl Filter {
@@ -39,6 +46,9 @@ impl Filter {
             b2: (vh - vb * k / q + k * k) / a0,
             a1: 2.0 * (k * k - 1.0) / a0,
             a2: (1.0 - k / q + k * k) / a0,
+
+            x1: 0.0, x2: 0.0,
+            y1: 0.0, y2: 0.0,
         }
     }
 
@@ -46,7 +56,6 @@ impl Filter {
     pub fn high_pass(sample_rate_hz: f32) -> Filter {
         // Coefficients taken from https://github.com/csteinmetz1/pyloudnorm/blob/
         // 6baa64d59b7794bc812e124438692e7fd2e65c0c/pyloudnorm/meter.py#L135-L136.
-        let gain_db = 0.0;
         let q = 0.5003270373253953;
         let center_hz = 38.13547087613982;
 
@@ -59,59 +68,99 @@ impl Filter {
             b0:  1.0,
             b1: -2.0,
             b2:  1.0,
+
+            x1: 0.0, x2: 0.0,
+            y1: 0.0, y2: 0.0,
         }
     }
 
-    pub fn apply(&self, input: &[f32], output: &mut Vec<f32>) {
-        // TODO: Tak those two initial samples from the previous block.
-        output.push(0.0);
-        output.push(0.0);
-        for i in 2..input.len() {
-            debug_assert!(input[i].abs() <= 1.0 + 1e-5, "Input too large: {}", input[i]);
-            let output_i = 0.0
-                + self.b0 * input[i]
-                + self.b1 * input[i - 1]
-                + self.b2 * input[i - 2]
-                - self.a1 * output[i - 1]
-                - self.a2 * output[i - 2];
-            output.push(output_i);
-        }
+    /// Feed the next input sample, get the next output sample.
+    #[inline(always)]
+    pub fn apply(&mut self, x0: f32) -> f32 {
+        let y0 = 0.0
+            + self.b0 * x0
+            + self.b1 * self.x1
+            + self.b2 * self.x2
+            - self.a1 * self.y1
+            - self.a2 * self.y2;
+
+        self.x2 = self.x1;
+        self.x1 = x0;
+        self.y2 = self.y1;
+        self.y1 = y0;
+
+        y0
     }
 }
 
-pub struct LoudnessMeter {
-    /// The sample rate of the audio to analyze, in Hertz.
-    sample_rate_hz: u32,
+#[derive(Clone)]
+pub struct ChannelLoudnessMeter {
+    /// The number of samples that fit in 100ms of audio.
+    samples_per_100ms: u32,
+
     /// Stage 1 filter (head effects, high shelf).
     filter_stage1: Filter,
+
     /// Stage 2 filter (high-pass).
     filter_stage2: Filter,
 
-    windows: Vec<f32>
+    /// Sum of the squares over non-overlapping windows of 100ms.
+    pub square_sum_windows: Vec<f32>,
+
+    /// The number of samples in the current unfinished window.
+    count: u32,
+
+    /// The sum of the squares of the samples in the current unfinished window.
+    square_sum: f32,
+
+    /// Residue for compensated summing.
+    residue: f32,
 }
 
-impl LoudnessMeter {
-    pub fn new(
-        sample_rate_hz: u32,
-    ) -> LoudnessMeter {
-        LoudnessMeter {
-            sample_rate_hz: sample_rate_hz,
+impl ChannelLoudnessMeter {
+    pub fn new(sample_rate_hz: u32) -> ChannelLoudnessMeter {
+        ChannelLoudnessMeter {
+            samples_per_100ms: sample_rate_hz / 10,
             filter_stage1: Filter::high_shelf(sample_rate_hz as f32),
             filter_stage2: Filter::high_pass(sample_rate_hz as f32),
-            windows: Vec::new(),
+            square_sum_windows: Vec::new(),
+            count: 0,
+            square_sum: 0.0,
+            residue: 0.0,
         }
     }
 
-    pub fn get_k_weighted_rms(&self, samples: &[f32]) -> Vec<f32> {
-        let mut tmp = Vec::with_capacity(samples.len());
-        let mut res = Vec::with_capacity(samples.len());
-        self.filter_stage1.apply(samples, &mut tmp);
-        self.filter_stage2.apply(&tmp[..], &mut res);
-        res
-    }
+    /// Feed input samples for loudness analysis.
+    ///
+    /// Full scale for the input samples is the interval [-1.0, 1.0]. Multiple
+    /// batches of samples can be fed to this channel analyzer; that is
+    /// equivalent to feeding a single chained iterator.
+    pub fn push<I: Iterator<Item = f32>>(&mut self, samples: I) {
+        // LLVM, if you could go ahead and inline those apply calls, and then
+        // unroll and vectorize the loop, that'd be terrific.
+        for x in samples {
+            let y = self.filter_stage1.apply(x);
+            let z = self.filter_stage2.apply(y);
 
-    pub fn write(left: Vec<f32>, right: Vec<f32>) -> usize {
-        unimplemented!()
+            // Add z^2 to self.square_sum, but use compensated summing to not
+            // lose precision too much due to adding very small numbers to very
+            // large numbers.
+            let sum = self.square_sum + (self.residue + z * z);
+            self.residue = (self.residue + z * z) - (sum - self.square_sum);
+
+            self.square_sum = sum;
+            self.count += 1;
+
+            // TODO: Should this branch be marked cold?
+            if self.count == self.samples_per_100ms {
+                self.square_sum_windows.push(self.square_sum);
+                // We intentionally do not reset the residue. That way, leftover
+                // energy from this window is not lost, so for the file overall,
+                // the sum remains more accurate.
+                self.square_sum = 0.0;
+                self.count = 0;
+            }
+        }
     }
 }
 
