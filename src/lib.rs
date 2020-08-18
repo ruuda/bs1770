@@ -19,6 +19,7 @@ struct Filter {
 }
 
 impl Filter {
+    /// Stage 1 of th BS.1770-4 pre-filter.
     pub fn high_shelf(sample_rate_hz: f32) -> Filter {
         // Coefficients taken from https://github.com/csteinmetz1/pyloudnorm/blob/
         // 6baa64d59b7794bc812e124438692e7fd2e65c0c/pyloudnorm/meter.py#L135-L136.
@@ -41,6 +42,7 @@ impl Filter {
         }
     }
 
+    /// Stage 2 of th BS.1770-4 pre-filter.
     pub fn high_pass(sample_rate_hz: f32) -> Filter {
         // Coefficients taken from https://github.com/csteinmetz1/pyloudnorm/blob/
         // 6baa64d59b7794bc812e124438692e7fd2e65c0c/pyloudnorm/meter.py#L135-L136.
@@ -57,6 +59,21 @@ impl Filter {
             b0:  1.0,
             b1: -2.0,
             b2:  1.0,
+        }
+    }
+
+    pub fn apply(&self, input: &[f32], output: &mut Vec<f32>) {
+        // TODO: Tak those two initial samples from the previous block.
+        output.push(0.0);
+        output.push(0.0);
+        for i in 2..input.len() {
+            let output_i = 0.0
+                + self.b0 * input[i]
+                + self.b1 * input[i - 1]
+                + self.b2 * input[i - 2]
+                - self.a1 * output[i - 1]
+                - self.a2 * output[i - 2];
+            output.push(output_i);
         }
     }
 }
@@ -84,8 +101,12 @@ impl LoudnessMeter {
         }
     }
 
-    pub fn get_k_weighted_rms(samples: &[f32]) -> f32 {
-        unimplemented!()
+    pub fn get_k_weighted_rms(&self, samples: &[f32]) -> Vec<f32> {
+        let mut tmp = Vec::with_capacity(samples.len());
+        let mut res = Vec::with_capacity(samples.len());
+        self.filter_stage1.apply(samples, &mut tmp);
+        self.filter_stage2.apply(&tmp[..], &mut res);
+        res
     }
 
     pub fn write(left: Vec<f32>, right: Vec<f32>) -> usize {
