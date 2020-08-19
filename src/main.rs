@@ -9,7 +9,7 @@ extern crate bs1770;
 extern crate claxon;
 extern crate hound;
 
-fn analyze_file(fname: &str) -> claxon::Result<Vec<bs1770::MeanSquare100ms>> {
+fn analyze_file(fname: &str) -> claxon::Result<Vec<bs1770::Power>> {
     let mut reader = claxon::FlacReader::open(fname)?;
 
     let streaminfo = reader.streaminfo();
@@ -34,8 +34,8 @@ fn analyze_file(fname: &str) -> claxon::Result<Vec<bs1770::MeanSquare100ms>> {
         &meters[0].square_sum_windows,
         &meters[1].square_sum_windows,
     );
-    let loudness_lkfs = bs1770::integrated_loudness_lkfs(&zipped);
-    println!("{:.3} LKFS  {}", loudness_lkfs.0, fname);
+    let loudness_lkfs = bs1770::gated_mean(&zipped).loudness_lkfs();
+    println!("{:.3} LKFS  {}", loudness_lkfs, fname);
 
     Ok(zipped)
 }
@@ -51,7 +51,7 @@ fn main() {
         }
     }
 
-    let album_loudness_lkfs = bs1770::integrated_loudness_lkfs(&album_windows);
-    println!("{:.3} LKFS  Album", album_loudness_lkfs.0);
+    let album_loudness_lkfs = bs1770::gated_mean(&album_windows).loudness_lkfs();
+    println!("{:.3} LKFS  Album", album_loudness_lkfs);
 }
 
