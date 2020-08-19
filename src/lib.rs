@@ -93,6 +93,28 @@ impl Filter {
     }
 }
 
+/// Compensated sum, for summing many values of different orders of magnitude
+/// accurately.
+#[derive(Copy, Clone, PartialEq)]
+struct Sum {
+    sum: f32,
+    residue: f32,
+}
+
+impl Sum {
+    #[inline(always)]
+    fn zero() -> Sum {
+        Sum { sum: 0.0, residue: 0.0 }
+    }
+
+    #[inline(always)]
+    fn add(&mut self, x: f32) {
+        let sum = self.sum + (self.residue + x);
+        self.residue = (self.residue + x) - (sum - self.sum);
+        self.sum = sum;
+    }
+}
+
 /// The mean of the squares of the K-weighted samples in a 100ms window.
 ///
 /// The mean squares are an intermediate step in integrated loudness
@@ -128,10 +150,7 @@ pub struct ChannelLoudnessMeter {
     count: u32,
 
     /// The sum of the squares of the samples in the current unfinished window.
-    square_sum: f32,
-
-    /// Residue for compensated summing.
-    residue: f32,
+    square_sum: Sum,
 }
 
 impl ChannelLoudnessMeter {
@@ -142,8 +161,7 @@ impl ChannelLoudnessMeter {
             filter_stage2: Filter::high_pass(sample_rate_hz as f32),
             square_sum_windows: Vec::new(),
             count: 0,
-            square_sum: 0.0,
-            residue: 0.0,
+            square_sum: Sum::zero(),
         }
     }
 
@@ -161,23 +179,17 @@ impl ChannelLoudnessMeter {
             let y = self.filter_stage1.apply(x);
             let z = self.filter_stage2.apply(y);
 
-            // Add z^2 to self.square_sum, but use compensated summing to not
-            // lose precision too much due to adding very small numbers to very
-            // large numbers.
-            let sum = self.square_sum + (self.residue + z * z);
-            self.residue = (self.residue + z * z) - (sum - self.square_sum);
-
-            self.square_sum = sum;
+            self.square_sum.add(z * z);
             self.count += 1;
 
             // TODO: Should this branch be marked cold?
             if self.count == self.samples_per_100ms {
-                let mean_squares = MeanSquare100ms(self.square_sum * normalizer);
+                let mean_squares = MeanSquare100ms(self.square_sum.sum * normalizer);
                 self.square_sum_windows.push(mean_squares);
                 // We intentionally do not reset the residue. That way, leftover
                 // energy from this window is not lost, so for the file overall,
                 // the sum remains more accurate.
-                self.square_sum = 0.0;
+                self.square_sum.sum = 0.0;
                 self.count = 0;
             }
         }
@@ -202,13 +214,13 @@ pub fn reduce_stereo(left: &[MeanSquare100ms], right: &[MeanSquare100ms]) -> Vec
 /// Loudness, K-weighted, Full Scale.
 pub struct Lkfs(pub f32);
 
-/// Perform a BS.1770-4 integrated loudness measurement.
+/// Perform an BS.1770-4 integrated loudness measurement.
 ///
 /// This loudness measurement is not simply the average over the windows, it
 /// performs two stages of gating to ensure that silent parts do not contribute
 /// to the measurment.
-pub fn integrated_loudness(mean_square_100ms_windows: &[MeanSquare100ms]) -> Lkfs {
-    let mut pass1 = Vec::with_capacity(mean_square_100ms_windows.len());
+pub fn integrated_loudness_lkfs(mean_square_100ms_windows: &[MeanSquare100ms]) -> Lkfs {
+    let mut gating_blocks = Vec::with_capacity(mean_square_100ms_windows.len());
 
     // Iterate over all 400ms windows.
     for window in mean_square_100ms_windows.windows(4) {
@@ -217,15 +229,37 @@ pub fn integrated_loudness(mean_square_100ms_windows: &[MeanSquare100ms]) -> Lkf
         // already been performed at this point.
         let gating_block_loudness_lkfs = -0.691 + 10.0 * window_mean_square.log10();
 
-        // Stage 1: an absolute threshold of -70 LKFS.
+        // Stage 1: an absolute threshold of -70 LKFS. (Equation 6, p.6.)
+        // TODO: Rearrange to avoid the log.
         if gating_block_loudness_lkfs > -70.0 {
-            pass1.push(window_mean_square);
+            gating_blocks.push(window_mean_square);
         }
     }
 
-    // TODO: Compute relative threshold, do pass 2.
-    unimplemented!();
+    // Compute the loudness after applying the absolute gate.
+    let mut sum_mean_squares = Sum::zero();
+    for &gating_block_mean_square in &gating_blocks {
+        sum_mean_squares.add(gating_block_mean_square);
+    }
+    let mean_squares = sum_mean_squares.sum / (gating_blocks.len() as f32);
+    let gated1_loudness_lkfs = -0.691 + 10.0 * mean_squares.log10();
+    let gamma_r_lkfs = gated1_loudness_lkfs - 10.0;
 
+    // Stage 2: Apply the relative gate.
+    sum_mean_squares = Sum::zero();
+    for &gating_block_mean_square in &gating_blocks {
+        let gating_block_loudness_lkfs = -0.691 + 10.0 * gating_block_mean_square.log10();
+
+        // TODO: Rearrange to avoid the log.
+        if gating_block_loudness_lkfs > gamma_r_lkfs {
+            sum_mean_squares.add(gating_block_mean_square);
+        }
+    }
+
+    let mean_squares = sum_mean_squares.sum / (gating_blocks.len() as f32);
+    let gated2_loudness_lkfs = -0.691 + 10.0 * mean_squares.log10();
+
+    Lkfs(gated2_loudness_lkfs)
 }
 
 #[cfg(test)]

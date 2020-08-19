@@ -23,31 +23,19 @@ fn analyze_file(fname: &str) -> claxon::Result<()> {
     let mut blocks = reader.blocks();
     let mut buffer = Vec::new();
 
-    let mut k = 0;
-
     while let Some(block) = blocks.read_next_or_eof(buffer)? {
         for (ch, meter) in meters.iter_mut().enumerate() {
             meter.push(block.channel(ch as u32).iter().map(|s| *s as f32 * normalizer));
         }
         buffer = block.into_buffer();
-
-        for i in k..meters[0].square_sum_windows.len() {
-            let sl = meters[0].square_sum_windows[i].0.sqrt().sqrt();
-            let sr = meters[1].square_sum_windows[i].0.sqrt().sqrt();
-            let nl = (15.0 * sl) as u32;
-            let nr = (15.0 * sr) as u32;
-            let mut wave = String::new();
-            for i in 0..16 {
-                wave.push(if i >= (15 - nl) { '=' } else { ' ' });
-            }
-            wave.push('-');
-            for i in 0..16 {
-                wave.push(if i <= nr { '=' } else { ' ' });
-            }
-            println!("{}", wave);
-        }
-        k = meters[0].square_sum_windows.len();
     }
+
+    let zipped = bs1770::reduce_stereo(
+        &meters[0].square_sum_windows,
+        &meters[1].square_sum_windows,
+    );
+    let loudness_lkfs = bs1770::integrated_loudness_lkfs(&zipped);
+    println!("{:.3} LKFS  {}", loudness_lkfs.0, fname);
 
     Ok(())
 }
