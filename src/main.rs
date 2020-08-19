@@ -32,10 +32,19 @@ fn analyze_file(fname: &str) -> claxon::Result<()> {
         buffer = block.into_buffer();
 
         for i in k..meters[0].square_sum_windows.len() {
-            for meter in meters.iter() {
-                print!("{:6.2} ", meter.square_sum_windows[i]);
+            let sl = meters[0].square_sum_windows[i].0.sqrt().sqrt();
+            let sr = meters[1].square_sum_windows[i].0.sqrt().sqrt();
+            let nl = (15.0 * sl) as u32;
+            let nr = (15.0 * sr) as u32;
+            let mut wave = String::new();
+            for i in 0..16 {
+                wave.push(if i >= (15 - nl) { '=' } else { ' ' });
             }
-            println!("");
+            wave.push('-');
+            for i in 0..16 {
+                wave.push(if i <= nr { '=' } else { ' ' });
+            }
+            println!("{}", wave);
         }
         k = meters[0].square_sum_windows.len();
     }

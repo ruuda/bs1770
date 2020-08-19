@@ -93,6 +93,21 @@ impl Filter {
     }
 }
 
+/// The mean of the squares of the K-weighted samples in a 100ms window.
+///
+/// The mean squares are an intermediate step in integrated loudness
+/// computation. For example, by combining the mean squares of four 100 ms
+/// windows, we can compute the RMS (root mean square) over the 400ms window.
+///
+/// The unit is the same as for sample amplitudes, which should be in the range
+/// [-1.0, 1.0], so the square should be in the range [0.0, 1.0], where 1.0 is
+/// “Full Scale”.
+///
+/// The value can either be for a single channel, or it can be a weighted
+/// average of multiple channels.
+#[derive(Copy, Clone, PartialEq, PartialOrd)]
+pub struct MeanSquare100ms(pub f32);
+
 #[derive(Clone)]
 pub struct ChannelLoudnessMeter {
     /// The number of samples that fit in 100ms of audio.
@@ -105,7 +120,7 @@ pub struct ChannelLoudnessMeter {
     filter_stage2: Filter,
 
     /// Sum of the squares over non-overlapping windows of 100ms.
-    pub square_sum_windows: Vec<f32>,
+    pub square_sum_windows: Vec<MeanSquare100ms>,
 
     /// The number of samples in the current unfinished window.
     count: u32,
@@ -136,6 +151,8 @@ impl ChannelLoudnessMeter {
     /// batches of samples can be fed to this channel analyzer; that is
     /// equivalent to feeding a single chained iterator.
     pub fn push<I: Iterator<Item = f32>>(&mut self, samples: I) {
+        let normalizer = 1.0 / self.samples_per_100ms as f32;
+
         // LLVM, if you could go ahead and inline those apply calls, and then
         // unroll and vectorize the loop, that'd be terrific.
         for x in samples {
@@ -153,7 +170,8 @@ impl ChannelLoudnessMeter {
 
             // TODO: Should this branch be marked cold?
             if self.count == self.samples_per_100ms {
-                self.square_sum_windows.push(self.square_sum);
+                let mean_squares = MeanSquare100ms(self.square_sum * normalizer);
+                self.square_sum_windows.push(mean_squares);
                 // We intentionally do not reset the residue. That way, leftover
                 // energy from this window is not lost, so for the file overall,
                 // the sum remains more accurate.
@@ -162,6 +180,18 @@ impl ChannelLoudnessMeter {
             }
         }
     }
+}
+
+/// Reduce mean-squares for multiple channels into single mean-squares.
+pub fn reduce_stereo(left: &[MeanSquare100ms], right: &[MeanSquare100ms]) -> Vec<MeanSquare100ms> {
+    assert_eq!(left.len(), right.len(), "Channels must have the same size.");
+    let mut result = Vec::with_capacity(left.len());
+    for (msl, msr) in left.iter().zip(right) {
+        // For stereo, both channels have equal weight, following table 3 from
+        // BS.1770-4.
+        result.push(MeanSquare100ms(0.5 * (msl.0 + msr.0)));
+    }
+    result
 }
 
 #[cfg(test)]
