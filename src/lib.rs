@@ -101,7 +101,9 @@ impl Filter {
 ///
 /// The unit is the same as for sample amplitudes, which should be in the range
 /// [-1.0, 1.0], so the square should be in the range [0.0, 1.0], where 1.0 is
-/// “Full Scale”.
+/// “Full Scale”. However, when this is the weighted sum over multiple channels,
+/// the value can exceed 1.0, because the weighted sum over channels is not
+/// normalized.
 ///
 /// The value can either be for a single channel, or it can be a weighted
 /// average of multiple channels.
@@ -188,10 +190,42 @@ pub fn reduce_stereo(left: &[MeanSquare100ms], right: &[MeanSquare100ms]) -> Vec
     let mut result = Vec::with_capacity(left.len());
     for (msl, msr) in left.iter().zip(right) {
         // For stereo, both channels have equal weight, following table 3 from
-        // BS.1770-4.
-        result.push(MeanSquare100ms(0.5 * (msl.0 + msr.0)));
+        // BS.1770-4. I find this strange, but the sum is not weighted, so
+        // stereo is inherently louder than mono. This makes sense if you play
+        // back on one vs. two speakers, but if you play back the mono signal on
+        // stereo speakers, it makes comparison unfair.
+        result.push(MeanSquare100ms(msl.0 + msr.0));
     }
     result
+}
+
+/// Loudness, K-weighted, Full Scale.
+pub struct Lkfs(pub f32);
+
+/// Perform a BS.1770-4 integrated loudness measurement.
+///
+/// This loudness measurement is not simply the average over the windows, it
+/// performs two stages of gating to ensure that silent parts do not contribute
+/// to the measurment.
+pub fn integrated_loudness(mean_square_100ms_windows: &[MeanSquare100ms]) -> Lkfs {
+    let mut pass1 = Vec::with_capacity(mean_square_100ms_windows.len());
+
+    // Iterate over all 400ms windows.
+    for window in mean_square_100ms_windows.windows(4) {
+        let window_mean_square: f32 = 0.25 * window.iter().map(|mean| mean.0).sum::<f32>();
+        // Equation 2 (p.5) or 4 (p.5) of BS.1770-4. The sum over channels has
+        // already been performed at this point.
+        let gating_block_loudness_lkfs = -0.691 + 10.0 * window_mean_square.log10();
+
+        // Stage 1: an absolute threshold of -70 LKFS.
+        if gating_block_loudness_lkfs > -70.0 {
+            pass1.push(window_mean_square);
+        }
+    }
+
+    // TODO: Compute relative threshold, do pass 2.
+    unimplemented!();
+
 }
 
 #[cfg(test)]
