@@ -9,7 +9,7 @@ extern crate bs1770;
 extern crate claxon;
 extern crate hound;
 
-fn analyze_file(fname: &str) -> claxon::Result<()> {
+fn analyze_file(fname: &str) -> claxon::Result<Vec<bs1770::MeanSquare100ms>> {
     let mut reader = claxon::FlacReader::open(fname)?;
 
     let streaminfo = reader.streaminfo();
@@ -37,16 +37,21 @@ fn analyze_file(fname: &str) -> claxon::Result<()> {
     let loudness_lkfs = bs1770::integrated_loudness_lkfs(&zipped);
     println!("{:.3} LKFS  {}", loudness_lkfs.0, fname);
 
-    Ok(())
+    Ok(zipped)
 }
 
 fn main() {
+    let mut album_windows = Vec::new();
+
     // Skip the name of the binary itself.
     for fname in std::env::args().skip(1) {
         match analyze_file(&fname[..]) {
-            Ok(()) => {}
+            Ok(mut track_windows) => album_windows.extend(track_windows.drain(..)),
             Err(e) => eprintln!("Failed to analyze {}: {:?}", fname, e),
         }
     }
+
+    let album_loudness_lkfs = bs1770::integrated_loudness_lkfs(&album_windows);
+    println!("{:.3} LKFS  Album", album_loudness_lkfs.0);
 }
 
