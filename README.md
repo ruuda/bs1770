@@ -28,6 +28,16 @@ unrolling loops, applying vectorization, etc.
 [tech3341]: https://tech.ebu.ch/publications/tech3341
 [tech3342]: https://tech.ebu.ch/publications/tech3342
 
+## Acknowledgements
+
+ * The filter coefficient formulas are adapted from [pyloudnorm][pyloudnorm] by
+   Christian Steinmetz.
+ * The filter coefficient formulas are [originally due to Brecht De Man][deman],
+   but the associated paper is not openly accessible.
+
+[pyloudnorm]: https://github.com/csteinmetz1/pyloudnorm
+[deman]:      https://github.com/BrechtDeMan/loudness.py
+
 ## License
 
 BS1770 is licensed under the [Apache 2.0][apache2] license. It may be used in
