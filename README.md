@@ -1,6 +1,20 @@
+# BS1770
+
+A Rust library that implements ITU-R BS.1770-4 loudness measurement.
+
+## Example
+
+TODO
+
+## Performance
+
+The initial focus is on correctness, the library has not been optimized yet.
+There is a lot of potential for optimization, for example by combining filters,
+unrolling loops, applying vectorization, etc.
+
 ## References
 
- * [ITU-R BS.1770.4][bs1770], a standard that specifies how to measure loudness,
+ * [ITU-R BS.1770-4][bs1770], a standard that specifies how to measure loudness,
    and which defines the LKFS unit (loudness units full scale, K-weighted).
  * [EBU R 128][r128], which specifies a target loudness level, based on the
    BS.1770 loudness measurement.
@@ -13,3 +27,15 @@
 [r128]:     https://tech.ebu.ch/publications/r128
 [tech3341]: https://tech.ebu.ch/publications/tech3341
 [tech3342]: https://tech.ebu.ch/publications/tech3342
+
+## License
+
+BS1770 is licensed under the [Apache 2.0][apache2] license. It may be used in
+free software as well as closed-source applications, both for commercial and
+non-commercial use under the conditions given in the license. If you want to
+use BS1770 in your GPLv2-licensed software, you can add an [exception][except]
+to your copyright notice. Please do not open an issue if you disagree with the
+choice of license.
+
+[apache2]: https://www.apache.org/licenses/LICENSE-2.0
+[except]:  https://www.gnu.org/licenses/gpl-faq.html#GPLIncompatibleLibs
