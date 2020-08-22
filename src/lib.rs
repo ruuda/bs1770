@@ -5,6 +5,18 @@
 // you may not use this file except in compliance with the License.
 // A copy of the License has been included in the root of the repository.
 
+//! Loudness analysis conforming to ITU-R BS.1770-4.
+//!
+//! This library offers the building blocks to perform BS.1770 loudness
+//! measurements, but you need to put the pieces together yourself.
+//!
+//! # Example
+//!
+//! ```
+//! // TODO.
+//! // For now, start with `ChannelLoudnessMeter.
+//! ```
+
 use std::f32;
 
 /// Coefficients for a 2nd-degree infinite impulse response filter.
@@ -172,15 +184,82 @@ impl Power {
 /// to perform a gated measurement, or they can be combined into even larger
 /// windows for a momentary loudness measurement.
 #[derive(Copy, Clone, Debug)]
-pub struct Windows100ms<T>(pub T);
+pub struct Windows100ms<T> {
+    pub inner: T
+}
 
 impl<T> Windows100ms<T> {
+    /// Wrap a new empty vector.
+    pub fn new() -> Windows100ms<Vec<T>> {
+        Windows100ms {
+            inner: Vec::new(),
+        }
+    }
+
     /// Apply `as_ref` to the inner value.
-    pub fn as_ref<U: ?Sized>(&self) -> Windows100ms<&U> where T: AsRef<U> {
-        Windows100ms(self.0.as_ref())
+    pub fn as_ref(&self) -> Windows100ms<&[Power]> where T: AsRef<[Power]> {
+        Windows100ms {
+            inner: self.inner.as_ref()
+        }
+    }
+
+    /// Apply `as_mut` to the inner value.
+    pub fn as_mut(&mut self) -> Windows100ms<&mut [Power]> where T: AsMut<[Power]> {
+        Windows100ms {
+            inner: self.inner.as_mut()
+        }
+    }
+
+    /// Apply `len` to the inner value.
+    pub fn len(&self) -> usize where T: AsRef<[Power]> {
+        self.inner.as_ref().len()
     }
 }
 
+/// Measures K-weighted power of non-overlapping 100ms windows of a single channel of audio.
+///
+/// # Output
+///
+/// The output of the meter is an intermediate result in the form of power for
+/// 100ms non-overlapping windows. The windows need to be processed further to
+/// get one of the instantaneous, momentary, and integrated loudness
+/// measurements defined in BS.1770.
+///
+/// The windows can also be inspected directly; the data is meaningful
+/// on its own (the K-weighted power delivered in that window of time), but it
+/// is not something that BS.1770 defines a term for.
+///
+/// # Multichannel audio
+///
+/// To perform a loudness measurement of multichannel audio, construct a
+/// `ChannelLoudnessMeter` per channel, and later combine the measured power
+/// with e.g. `reduce_stereo`.
+///
+/// # Instantaneous loudness
+///
+/// The instantaneous loudness is the power over a 400ms window, so you can
+/// average four 100ms windows. No special functionality is implemented to help
+/// with that at this time. (TODO)
+///
+/// # Momentary loudness
+///
+/// The momentary loudness is the power over a 3-second window, so you can
+/// average thirty 100ms windows. No special functionality is implemented to
+/// help with that at this time. (TODO)
+///
+/// # Integrated loudness
+///
+/// Use `gated_mean` to perform an integrated loudness measurement:
+///
+/// ```
+/// # use std::iter;
+/// # use bs1770::{ChannelLoudnessMeter, gated_mean};
+/// # let sample_rate_hz = 44_100;
+/// # let samples_per_100ms = sample_rate_hz / 10;
+/// # let mut meter = ChannelLoudnessMeter::new(sample_rate_hz);
+/// # meter.push((0..44_100).map(|i| (i as f32 * 0.01).sin()));
+/// let integrated_loudness_lkfs = gated_mean(meter.as_100ms_windows()).loudness_lkfs();
+/// ```
 #[derive(Clone)]
 pub struct ChannelLoudnessMeter {
     /// The number of samples that fit in 100ms of audio.
@@ -202,14 +281,14 @@ pub struct ChannelLoudnessMeter {
     square_sum: Sum,
 }
 
-/// Measures K-weighted power of non-overlapping 100ms windows of a single channel of audio.
 impl ChannelLoudnessMeter {
+    /// Construct a new loudness meter for the given sample rate.
     pub fn new(sample_rate_hz: u32) -> ChannelLoudnessMeter {
         ChannelLoudnessMeter {
             samples_per_100ms: sample_rate_hz / 10,
             filter_stage1: Filter::high_shelf(sample_rate_hz as f32),
             filter_stage2: Filter::high_pass(sample_rate_hz as f32),
-            windows: Windows100ms(Vec::new()),
+            windows: Windows100ms::new(),
             count: 0,
             square_sum: Sum::zero(),
         }
@@ -217,9 +296,40 @@ impl ChannelLoudnessMeter {
 
     /// Feed input samples for loudness analysis.
     ///
-    /// Full scale for the input samples is the interval [-1.0, 1.0]. Multiple
-    /// batches of samples can be fed to this channel analyzer; that is
-    /// equivalent to feeding a single chained iterator.
+    /// # Full scale
+    ///
+    /// Full scale for the input samples is the interval [-1.0, 1.0]. If your
+    /// input consists of signed integer samples, you can convert as follows:
+    ///
+    /// ```
+    /// # let mut meter = bs1770::ChannelLoudnessMeter::new(44_100);
+    /// # let bits_per_sample = 16_usize;
+    /// # let samples = &[0_i16];
+    /// // Note that the maximum amplitude is `1 << (bits_per_sample - 1)`,
+    /// // one bit is the sign bit.
+    /// let normalizer = 1.0 / (1_u64 << (bits_per_sample - 1)) as f32;
+    /// meter.push(samples.iter().map(|&s| s as f32 * normalizer));
+    /// ```
+    ///
+    /// # Repeated calls
+    ///
+    /// You can call `push` multiple times to feed multiple batches of samples.
+    /// This is equivalent to feeding a single chained iterator. The leftover of
+    /// samples that did not fill a full 100ms window is not discarded:
+    ///
+    /// ```
+    /// # use std::iter;
+    /// # use bs1770::ChannelLoudnessMeter;
+    /// let sample_rate_hz = 44_100;
+    /// let samples_per_100ms = sample_rate_hz / 10;
+    /// let mut meter = ChannelLoudnessMeter::new(sample_rate_hz);
+    ///
+    /// meter.push(iter::repeat(0.0).take(samples_per_100ms as usize - 1));
+    /// assert_eq!(meter.as_100ms_windows().len(), 0);
+    ///
+    /// meter.push(iter::once(0.0));
+    /// assert_eq!(meter.as_100ms_windows().len(), 1);
+    /// ```
     pub fn push<I: Iterator<Item = f32>>(&mut self, samples: I) {
         let normalizer = 1.0 / self.samples_per_100ms as f32;
 
@@ -235,7 +345,7 @@ impl ChannelLoudnessMeter {
             // TODO: Should this branch be marked cold?
             if self.count == self.samples_per_100ms {
                 let mean_squares = Power(self.square_sum.sum * normalizer);
-                self.windows.0.push(mean_squares);
+                self.windows.inner.push(mean_squares);
                 // We intentionally do not reset the residue. That way, leftover
                 // energy from this window is not lost, so for the file overall,
                 // the sum remains more accurate.
@@ -267,12 +377,14 @@ pub fn reduce_stereo(
     left: Windows100ms<&[Power]>,
     right: Windows100ms<&[Power]>,
 ) -> Windows100ms<Vec<Power>> {
-    assert_eq!(left.0.len(), right.0.len(), "Channels must have the same length.");
-    let mut result = Vec::with_capacity(left.0.len());
-    for (l, r) in left.0.iter().zip(right.0) {
+    assert_eq!(left.len(), right.len(), "Channels must have the same length.");
+    let mut result = Vec::with_capacity(left.len());
+    for (l, r) in left.inner.iter().zip(right.inner) {
         result.push(Power(l.0 + r.0));
     }
-    Windows100ms(result)
+    Windows100ms {
+        inner: result
+    }
 }
 
 /// In-place version of `reduce_stereo` that stores the result in the former left channel.
@@ -280,25 +392,29 @@ pub fn reduce_stereo_in_place(
     left: Windows100ms<&mut [Power]>,
     right: Windows100ms<&[Power]>,
 ) {
-    assert_eq!(left.0.len(), right.0.len(), "Channels must have the same length.");
-    for (l, r) in left.0.iter_mut().zip(right.0) {
+    assert_eq!(left.len(), right.len(), "Channels must have the same length.");
+    for (l, r) in left.inner.iter_mut().zip(right.inner) {
         l.0 += r.0;
     }
 }
 
-/// Perform gating for an BS.1770-4 integrated loudness measurement.
+/// Perform gating for an BS.1770-4 integrated loudness measurement, then aveage.
 ///
-/// This loudness measurement is not simply the average over the windows, it
-/// performs two stages of gating to ensure that silent parts do not contribute
-/// to the measurment.
+/// The integrated loudness measurement is not just the average power over the
+/// entire signal. BS.1770-4 defines defines two stages of gating that exclude
+/// parts of the signal, to ensure that silent parts do not contribute to the
+/// loudness measurment. This function performs that gating, and returns the
+/// average power over the windows that were not excluded.
+///
+/// The result of this function is the integrated loudness measurement.
 pub fn gated_mean(windows_100ms: Windows100ms<&[Power]>) -> Power {
-    let mut gating_blocks = Vec::with_capacity(windows_100ms.0.len());
+    let mut gating_blocks = Vec::with_capacity(windows_100ms.len());
 
     // Stage 1: an absolute threshold of -70 LKFS. (Equation 6, p.6.)
     let absolute_threshold = Power::from_lkfs(-70.0);
 
     // Iterate over all 400ms windows.
-    for window in windows_100ms.0.windows(4) {
+    for window in windows_100ms.inner.windows(4) {
         // Note that the sum over channels has already been performed at this point.
         let gating_block_power = Power(0.25 * window.iter().map(|mean| mean.0).sum::<f32>());
 

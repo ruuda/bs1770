@@ -43,12 +43,12 @@ fn analyze_file(fname: &str) -> claxon::Result<bs1770::Windows100ms<Vec<bs1770::
 }
 
 fn main() {
-    let mut album_windows = bs1770::Windows100ms(Vec::new());
+    let mut album_windows = bs1770::Windows100ms::new();
 
     // Skip the name of the binary itself.
     for fname in std::env::args().skip(1) {
         match analyze_file(&fname[..]) {
-            Ok(mut track_windows) => album_windows.0.extend(track_windows.0.drain(..)),
+            Ok(mut track_windows) => album_windows.inner.extend(track_windows.inner.drain(..)),
             Err(e) => eprintln!("Failed to analyze {}: {:?}", fname, e),
         }
     }
