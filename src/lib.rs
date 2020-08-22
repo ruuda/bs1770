@@ -319,7 +319,7 @@ mod tests {
         power: Power,
         target_lkfs: f32,
         plusminus_lkfs: f32,
-        context: String,
+        context: &str,
     ) {
         assert!(
             power.loudness_lkfs() > target_lkfs - plusminus_lkfs,
@@ -369,7 +369,7 @@ mod tests {
                 let power = gated_mean(&windows_stereo);
                 assert_loudness_in_range_lkfs(
                     power, amplitude_dbfs, 0.1,
-                    format!(
+                    &format!(
                         "sample_rate: {} Hz, amplitude: {:.1} dBFS",
                         sample_rate_hz,
                         amplitude_dbfs,
@@ -424,7 +424,7 @@ mod tests {
                 let power = gated_mean(&windows_stereo);
                 assert_loudness_in_range_lkfs(
                     power, -23.0, 0.1,
-                    format!(
+                    &format!(
                         "sample_rate: {} Hz, case {}",
                         sample_rate_hz,
                         i + 3
@@ -432,5 +432,50 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Analyze a single channel of a wave file.
+    ///
+    /// This is a bit inefficient because we have to read the file twice to get
+    /// all channels, but it is simple to implement.
+    fn analyze_wav_channel(fname: &str, channel: usize) -> ChannelLoudnessMeter {
+        let mut reader = hound::WavReader::open(fname)
+            .expect("Failed to open reference file, run ./download_test_data.sh to download it.");
+        let spec = reader.spec();
+        // The maximum amplitude is 1 << (bits per sample - 1), because one bit
+        // is the sign bit.
+        let normalizer = 1.0 / (1_u64 << (spec.bits_per_sample - 1)) as f32;
+
+        // Step the sampes by 2, because the audio is stereo, skipping `channel`
+        // at the start to ensure that we select the right channel.
+        let channel_samples = reader
+            .samples()
+            .skip(channel)
+            .step_by(2)
+            .map(|s: hound::Result<i32>| s.unwrap() as f32 * normalizer);
+
+        let mut meter = ChannelLoudnessMeter::new(spec.sample_rate);
+        meter.push(channel_samples);
+        meter
+    }
+
+    fn test_stereo_reference_file(fname: &str) {
+        let windows_ch0 = analyze_wav_channel(fname, 0).square_sum_windows;
+        let windows_ch1 = analyze_wav_channel(fname, 1).square_sum_windows;
+        let windows_stereo = reduce_stereo(&windows_ch0, &windows_ch1);
+        let power = gated_mean(&windows_stereo);
+        // All of the reference samples have the same expected loudness of
+        // -23 LKFS.
+        assert_loudness_in_range_lkfs(power, -23.0, 0.1, fname);
+    }
+
+    #[test]
+    fn loudness_matches_tech_3341_2016_case_7() {
+        test_stereo_reference_file("tech_3341_test_case_7.wav");
+    }
+
+    #[test]
+    fn loudness_matches_tech_3341_2016_case_8() {
+        test_stereo_reference_file("tech_3341_test_case_8.wav");
     }
 }

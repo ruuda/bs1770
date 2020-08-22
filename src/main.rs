@@ -13,7 +13,9 @@ fn analyze_file(fname: &str) -> claxon::Result<Vec<bs1770::Power>> {
     let mut reader = claxon::FlacReader::open(fname)?;
 
     let streaminfo = reader.streaminfo();
-    let normalizer = 1.0 / ((1_u64 << streaminfo.bits_per_sample) - 1) as f32;
+    // The maximum amplitude is 1 << (bits per sample - 1), because one bit
+    // is the sign bit.
+    let normalizer = 1.0 / (1_u64 << (streaminfo.bits_per_sample - 1)) as f32;
 
     let mut meters = vec![
         bs1770::ChannelLoudnessMeter::new(streaminfo.sample_rate);
