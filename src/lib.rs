@@ -134,7 +134,12 @@ impl Sum {
 pub struct Power(pub f32);
 
 impl Power {
-    /// Return the loudness, K-weighted, Full Scale, of this window.
+    pub fn from_lkfs(lufs: f32) -> Power {
+        // The inverse of the formula below.
+        Power(10.0_f32.powf((lufs + 0.691) * 0.1))
+    }
+
+    /// Return the loudness of this window in Loudness Units, K-weighted, relative to Full Scale.
     pub fn loudness_lkfs(&self) -> f32 {
         // Equation 2 (p.5) of BS.1770-4.
         -0.691 + 10.0 * self.0.log10()
@@ -229,38 +234,40 @@ pub fn reduce_stereo(left: &[Power], right: &[Power]) -> Vec<Power> {
 pub fn gated_mean(windows_100ms: &[Power]) -> Power {
     let mut gating_blocks = Vec::with_capacity(windows_100ms.len());
 
+    // Stage 1: an absolute threshold of -70 LKFS. (Equation 6, p.6.)
+    let absolute_threshold = Power::from_lkfs(-70.0);
+
     // Iterate over all 400ms windows.
     for window in windows_100ms.windows(4) {
         // Note that the sum over channels has already been performed at this point.
         let gating_block_power = Power(0.25 * window.iter().map(|mean| mean.0).sum::<f32>());
 
-        // Stage 1: an absolute threshold of -70 LKFS. (Equation 6, p.6.)
-        // TODO: Rearrange to avoid the log.
-        if gating_block_power.loudness_lkfs() > -70.0 {
+        if gating_block_power > absolute_threshold {
             gating_blocks.push(gating_block_power);
         }
     }
 
-    // Compute the loudness after applying the absolute gate.
+    // Compute the loudness after applying the absolute gate, in order to
+    // determine the threshold for the relative gate.
     let mut sum_power = Sum::zero();
     for &gating_block_power in &gating_blocks {
         sum_power.add(gating_block_power.0);
     }
-    let gated1_power = Power(sum_power.sum / (gating_blocks.len() as f32));
-    let gamma_r_lkfs = gated1_power.loudness_lkfs() - 10.0;
+    let absolute_gated_power = Power(sum_power.sum / (gating_blocks.len() as f32));
 
     // Stage 2: Apply the relative gate.
-    sum_power = Sum::zero();
+    let relative_threshold = Power::from_lkfs(absolute_gated_power.loudness_lkfs() - 10.0);
+    let mut sum_power = Sum::zero();
     let mut n_blocks = 0_usize;
     for &gating_block_power in &gating_blocks {
-        // TODO: Rearrange to avoid the log.
-        if gating_block_power.loudness_lkfs() > gamma_r_lkfs {
+        if gating_block_power > relative_threshold {
             sum_power.add(gating_block_power.0);
             n_blocks += 1;
         }
     }
+    let relative_gated_power = Power(sum_power.sum / n_blocks as f32);
 
-    Power(sum_power.sum / n_blocks as f32)
+    relative_gated_power
 }
 
 #[cfg(test)]
