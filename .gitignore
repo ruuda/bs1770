@@ -4,3 +4,7 @@
 # Editor files
 *.swp
 *.swo
+
+# Reference data for tests
+/ebu-loudness-test-setv05.zip
+/tech_3341_*.wav
