@@ -214,7 +214,8 @@ pub fn reduce_stereo(left: &[Power], right: &[Power]) -> Vec<Power> {
         // BS.1770-4. I find this strange, but the sum is not normalized, so
         // stereo is inherently louder than mono. This makes sense if you play
         // back on one vs. two speakers, but if you play back the mono signal on
-        // stereo speakers, it makes comparison unfair.
+        // stereo speakers, it makes comparison unfair. There is however an
+        // offest built into the computations that compensates for this.
         result.push(Power(msl.0 + msr.0));
     }
     result
@@ -262,7 +263,8 @@ pub fn gated_mean(windows_100ms: &[Power]) -> Power {
 
 #[cfg(test)]
 mod tests {
-    use super::Filter;
+    use super::{ChannelLoudnessMeter, Filter, Power};
+    use super::{reduce_stereo, gated_mean};
 
     #[test]
     fn filter_high_shelf_matches_spec() {
@@ -288,5 +290,73 @@ mod tests {
         assert!((f.b0 -  1.0).abs() < 1e-6);
         assert!((f.b1 - -2.0).abs() < 1e-6);
         assert!((f.b2 -  1.0).abs() < 1e-6);
+    }
+
+    fn append_pure_tone(
+        samples: &mut Vec<f32>,
+        sample_rate_hz: usize,
+        frequency_hz: usize,
+        duration_seconds: usize,
+        amplitude_dbfs: f32,
+    ) {
+        use std::f32;
+        let num_samples = duration_seconds * sample_rate_hz;
+        samples.reserve(num_samples);
+
+        let sample_duration_seconds = 1.0 / (sample_rate_hz as f32);
+        let amplitude = 10.0_f32.powf(amplitude_dbfs / 20.0);
+
+        for i in 0..num_samples {
+            let time_seconds = i as f32 * sample_duration_seconds;
+            let angle = f32::consts::PI * 2.0 * time_seconds * frequency_hz as f32;
+            samples.push(angle.sin() * amplitude);
+        }
+    }
+
+    fn assert_loudness_in_range_lkfs(power: Power, target_lkfs: f32, plusminus_lkfs: f32) {
+        assert!(
+            power.loudness_lkfs() > target_lkfs - plusminus_lkfs,
+            "Actual loudness of {:.1} LKFS too low for reference {:.1} ± {:.1} LKFS",
+            power.loudness_lkfs(),
+            target_lkfs,
+            plusminus_lkfs,
+        );
+        assert!(
+            power.loudness_lkfs() < target_lkfs + plusminus_lkfs,
+            "Actual loudness of {:.1} LKFS too high for reference {:.1} ± {:.1} LKFS",
+            power.loudness_lkfs(),
+            target_lkfs,
+            plusminus_lkfs,
+        );
+    }
+
+    #[test]
+    fn loudness_matches_tech_3341_case_1() {
+        // Case 1 on p.10 of EBU Tech 3341, a stereo sine wave of 1000 Hz at
+        // -23.0 dBFS for 20 seconds.
+        let sample_rates = [44_100, 48_000, 96_000, 192_000];
+        for &sample_rate_hz in &sample_rates {
+            let mut samples = Vec::new();
+            let frequency_hz = 1_000;
+            let duration_seconds = 20;
+            let amplitude_dbfs = -23.0;
+            append_pure_tone(
+                &mut samples,
+                sample_rate_hz,
+                frequency_hz,
+                duration_seconds,
+                amplitude_dbfs,
+            );
+
+            let mut meter = ChannelLoudnessMeter::new(sample_rate_hz as u32);
+            meter.push(samples.iter().cloned());
+
+            let windows_single = meter.square_sum_windows;
+            // The reference specifies a stereo signal with the same contents in
+            // both channels.
+            let windows_stereo = reduce_stereo(&windows_single, &windows_single);
+            let power = gated_mean(&windows_stereo);
+            assert_loudness_in_range_lkfs(power, -23.0, 0.1);
+        }
     }
 }
