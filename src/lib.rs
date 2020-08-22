@@ -398,7 +398,7 @@ pub fn reduce_stereo_in_place(
     }
 }
 
-/// Perform gating for an BS.1770-4 integrated loudness measurement, then aveage.
+/// Perform gating and averaging for a BS.1770-4 integrated loudness measurement.
 ///
 /// The integrated loudness measurement is not just the average power over the
 /// entire signal. BS.1770-4 defines defines two stages of gating that exclude
