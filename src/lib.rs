@@ -117,29 +117,45 @@ impl Sum {
 
 /// The mean of the squares of the K-weighted samples in a window of time.
 ///
-/// The mean squares are an intermediate step in integrated loudness
-/// computation. Initially an audio file is split up into non-overlapping
-/// windows of 100ms, which are then combined into overlapping windows of 400ms
-/// for gating. Both can be represented by this power measurement.
+/// K-weighted power is equivalent to K-weighted loudness, the only difference
+/// is one of scale: power is linear in sample amplitudes, whereas loudness
+/// units are logarithmic. `loudness_lkfs` and `from_lkfs` convert between power,
+/// and K-weighted Loudness Units relative to nominal Full Scale (LKFS).
 ///
-/// The unit is the same as for sample amplitudes, which should be in the range
-/// [-1.0, 1.0], so the square should be in the range [0.0, 1.0], where 1.0 is
-/// “Full Scale”. However, when this is the weighted sum over multiple channels,
-/// the value can exceed 1.0, because the weighted sum over channels is not
-/// normalized.
+/// The term “LKFS” (Loudness Units, K-Weighted, relative to nominal Full Scale)
+/// is used in BS.1770-4 to emphasize K-weighting, but the term is otherwise
+/// interchangeable with the more widespread term “LUFS” (Loudness Units,
+/// relative to Full Scale). Loudness units are related to decibels in the
+/// following sense: boosting a signal that has a loudness of
+/// -<var>L<sub>K</sub></var> LUFS by <var>L<sub>K</sub></var> dB (by
+/// multiplying the amplitude by 10<sup><var>L<sub>K</sub></var>/20</sup>) will
+/// bring the loudness to 0 LUFS.
 ///
-/// The power can either be for a single channel, or it can be a weighted
-/// sum of multiple channels.
+/// K-weighting refers to a high-shelf and high-pass filter that model the
+/// effect that humans perceive a certain amount of power in low frequencies to
+/// be less loud than the same amount of power in higher frequencies. In this
+/// library the `Power` type is used exclusively to refer to power after applying K-weighting.
+///
+/// The nominal “full scale” is the range [-1.0, 1.0]. Because the power is the
+/// mean square of the samples, if no input samples exceeded the full scale, the
+/// power will be in the range [0.0, 1.0]. However, the power delivered by
+/// multiple channels, which is a weighted sum over individual channel powers,
+/// can exceed this range, because the weighted sum is not normalized.
 #[derive(Copy, Clone, PartialEq, PartialOrd)]
 pub struct Power(pub f32);
 
 impl Power {
-    pub fn from_lkfs(lufs: f32) -> Power {
+    /// Convert Loudness Units relative to Full Scale into a squared sample amplitude.
+    ///
+    /// This is the inverse of `loudness_lkfs`.
+    pub fn from_lkfs(lkfs: f32) -> Power {
         // The inverse of the formula below.
-        Power(10.0_f32.powf((lufs + 0.691) * 0.1))
+        Power(10.0_f32.powf((lkfs + 0.691) * 0.1))
     }
 
     /// Return the loudness of this window in Loudness Units, K-weighted, relative to Full Scale.
+    ///
+    /// This is the inverse of `from_lkfs`.
     pub fn loudness_lkfs(&self) -> f32 {
         // Equation 2 (p.5) of BS.1770-4.
         -0.691 + 10.0 * self.0.log10()
