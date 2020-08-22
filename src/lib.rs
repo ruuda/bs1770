@@ -251,14 +251,16 @@ pub fn gated_mean(windows_100ms: &[Power]) -> Power {
 
     // Stage 2: Apply the relative gate.
     sum_power = Sum::zero();
+    let mut n_blocks = 0_usize;
     for &gating_block_power in &gating_blocks {
         // TODO: Rearrange to avoid the log.
         if gating_block_power.loudness_lkfs() > gamma_r_lkfs {
             sum_power.add(gating_block_power.0);
+            n_blocks += 1;
         }
     }
 
-    Power(sum_power.sum / (gating_blocks.len() as f32))
+    Power(sum_power.sum / n_blocks as f32)
 }
 
 #[cfg(test)]
