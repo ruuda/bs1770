@@ -296,11 +296,11 @@ mod tests {
         samples: &mut Vec<f32>,
         sample_rate_hz: usize,
         frequency_hz: usize,
-        duration_seconds: usize,
+        duration_milliseconds: usize,
         amplitude_dbfs: f32,
     ) {
         use std::f32;
-        let num_samples = duration_seconds * sample_rate_hz;
+        let num_samples = (duration_milliseconds * sample_rate_hz) / 1000;
         samples.reserve(num_samples);
 
         let sample_duration_seconds = 1.0 / (sample_rate_hz as f32);
@@ -313,50 +313,122 @@ mod tests {
         }
     }
 
-    fn assert_loudness_in_range_lkfs(power: Power, target_lkfs: f32, plusminus_lkfs: f32) {
+    fn assert_loudness_in_range_lkfs(
+        power: Power,
+        target_lkfs: f32,
+        plusminus_lkfs: f32,
+        context: String,
+    ) {
         assert!(
             power.loudness_lkfs() > target_lkfs - plusminus_lkfs,
-            "Actual loudness of {:.1} LKFS too low for reference {:.1} ± {:.1} LKFS",
+            "Actual loudness of {:.1} LKFS too low for reference {:.1} ± {:.1} LKFS at {}",
             power.loudness_lkfs(),
             target_lkfs,
             plusminus_lkfs,
+            context,
         );
         assert!(
             power.loudness_lkfs() < target_lkfs + plusminus_lkfs,
-            "Actual loudness of {:.1} LKFS too high for reference {:.1} ± {:.1} LKFS",
+            "Actual loudness of {:.1} LKFS too high for reference {:.1} ± {:.1} LKFS at {}",
             power.loudness_lkfs(),
             target_lkfs,
             plusminus_lkfs,
+            context,
         );
     }
 
     #[test]
-    fn loudness_matches_tech_3341_case_1() {
-        // Case 1 on p.10 of EBU Tech 3341, a stereo sine wave of 1000 Hz at
-        // -23.0 dBFS for 20 seconds.
+    fn loudness_matches_tech_3341_2016_case_1_and_2() {
+        // Case 1 and 2 on p.10 of EBU Tech 3341-2016, a stereo sine wave of
+        // 1000 Hz at -23.0 dBFS and -33.0 dBFS for 20 seconds.
         let sample_rates = [44_100, 48_000, 96_000, 192_000];
+        let amplitudes = [-23.0, -33.0];
         for &sample_rate_hz in &sample_rates {
-            let mut samples = Vec::new();
-            let frequency_hz = 1_000;
-            let duration_seconds = 20;
-            let amplitude_dbfs = -23.0;
-            append_pure_tone(
-                &mut samples,
-                sample_rate_hz,
-                frequency_hz,
-                duration_seconds,
-                amplitude_dbfs,
-            );
+            for &amplitude_dbfs in &amplitudes {
+                let mut samples = Vec::new();
+                let frequency_hz = 1_000;
+                let duration_milliseconds = 20_000;
+                append_pure_tone(
+                    &mut samples,
+                    sample_rate_hz,
+                    frequency_hz,
+                    duration_milliseconds,
+                    amplitude_dbfs,
+                );
 
-            let mut meter = ChannelLoudnessMeter::new(sample_rate_hz as u32);
-            meter.push(samples.iter().cloned());
+                let mut meter = ChannelLoudnessMeter::new(sample_rate_hz as u32);
+                meter.push(samples.iter().cloned());
 
-            let windows_single = meter.square_sum_windows;
-            // The reference specifies a stereo signal with the same contents in
-            // both channels.
-            let windows_stereo = reduce_stereo(&windows_single, &windows_single);
-            let power = gated_mean(&windows_stereo);
-            assert_loudness_in_range_lkfs(power, -23.0, 0.1);
+                // The reference specifies a stereo signal with the same contents in
+                // both channels.
+                let windows_single = meter.square_sum_windows;
+                let windows_stereo = reduce_stereo(&windows_single, &windows_single);
+
+                let power = gated_mean(&windows_stereo);
+                assert_loudness_in_range_lkfs(
+                    power, amplitude_dbfs, 0.1,
+                    format!(
+                        "sample_rate: {} Hz, amplitude: {:.1} dBFS",
+                        sample_rate_hz,
+                        amplitude_dbfs,
+                    ),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn loudness_matches_tech_3341_2016_case_3_and_4_and_5() {
+        // Case 3, 4, and 5 on p.10 of EBU Tech 3341-2016. Their expected
+        // outputs are the same, but the tones are different.
+        let sample_rates = [44_100, 48_000, 96_000, 192_000];
+        let tones_duration_milliseconds_amplitude_dbfs = [
+            &[
+                (10_000, -36.0),
+                (60_000, -23.0),
+                (10_000, -36.0),
+            ][..],
+            &[
+                (10_000, -72.0),
+                (10_000, -36.0),
+                (60_000, -23.0),
+                (10_000, -36.0),
+                (10_000, -72.0),
+            ][..],
+            &[
+                (20_000, -26.0),
+                (20_100, -20.0),
+                (20_000, -26.0),
+            ][..],
+        ];
+        for &sample_rate_hz in &sample_rates {
+            for (i, &test_case) in tones_duration_milliseconds_amplitude_dbfs.iter().enumerate() {
+                let mut meter = ChannelLoudnessMeter::new(sample_rate_hz as u32);
+                let mut samples = Vec::new();
+                let frequency_hz = 1_000;
+
+                for &(duration_milliseconds, amplitude_dbfs) in test_case.iter() {
+                    append_pure_tone(
+                        &mut samples,
+                        sample_rate_hz,
+                        frequency_hz,
+                        duration_milliseconds,
+                        amplitude_dbfs,
+                    );
+                }
+                meter.push(samples.iter().cloned());
+                let windows_single = meter.square_sum_windows;
+                let windows_stereo = reduce_stereo(&windows_single, &windows_single);
+                let power = gated_mean(&windows_stereo);
+                assert_loudness_in_range_lkfs(
+                    power, -23.0, 0.1,
+                    format!(
+                        "sample_rate: {} Hz, case {}",
+                        sample_rate_hz,
+                        i + 3
+                    ),
+                );
+            }
         }
     }
 }
