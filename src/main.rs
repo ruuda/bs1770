@@ -9,7 +9,7 @@ extern crate bs1770;
 extern crate claxon;
 extern crate hound;
 
-fn analyze_file(fname: &str) -> claxon::Result<Vec<bs1770::Power>> {
+fn analyze_file(fname: &str) -> claxon::Result<bs1770::Windows100ms<Vec<bs1770::Power>>> {
     let mut reader = claxon::FlacReader::open(fname)?;
 
     let streaminfo = reader.streaminfo();
@@ -33,27 +33,27 @@ fn analyze_file(fname: &str) -> claxon::Result<Vec<bs1770::Power>> {
     }
 
     let zipped = bs1770::reduce_stereo(
-        &meters[0].square_sum_windows,
-        &meters[1].square_sum_windows,
+        meters[0].as_100ms_windows(),
+        meters[1].as_100ms_windows(),
     );
-    let loudness_lkfs = bs1770::gated_mean(&zipped).loudness_lkfs();
+    let loudness_lkfs = bs1770::gated_mean(zipped.as_ref()).loudness_lkfs();
     println!("{:.3} LKFS  {}", loudness_lkfs, fname);
 
     Ok(zipped)
 }
 
 fn main() {
-    let mut album_windows = Vec::new();
+    let mut album_windows = bs1770::Windows100ms(Vec::new());
 
     // Skip the name of the binary itself.
     for fname in std::env::args().skip(1) {
         match analyze_file(&fname[..]) {
-            Ok(mut track_windows) => album_windows.extend(track_windows.drain(..)),
+            Ok(mut track_windows) => album_windows.0.extend(track_windows.0.drain(..)),
             Err(e) => eprintln!("Failed to analyze {}: {:?}", fname, e),
         }
     }
 
-    let album_loudness_lkfs = bs1770::gated_mean(&album_windows).loudness_lkfs();
+    let album_loudness_lkfs = bs1770::gated_mean(album_windows.as_ref()).loudness_lkfs();
     println!("{:.3} LKFS  Album", album_loudness_lkfs);
 }
 

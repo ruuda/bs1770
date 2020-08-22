@@ -162,6 +162,25 @@ impl Power {
     }
 }
 
+/// K-weighted power for non-overlapping windows of audio, 100ms in length.
+///
+/// The `ChannelLoudnessMeter` applies K-weighting and then produces the power
+/// for non-overlapping windows of 100ms duration.
+///
+/// These non-overlapping 100ms windows can later be combined into overlapping
+/// windows of 400ms, spaced 100ms apart, to compute instantaneous loudness or
+/// to perform a gated measurement, or they can be combined into even larger
+/// windows for a momentary loudness measurement.
+#[derive(Copy, Clone, Debug)]
+pub struct Windows100ms<T>(pub T);
+
+impl<T> Windows100ms<T> {
+    /// Apply `as_ref` to the inner value.
+    pub fn as_ref<U: ?Sized>(&self) -> Windows100ms<&U> where T: AsRef<U> {
+        Windows100ms(self.0.as_ref())
+    }
+}
+
 #[derive(Clone)]
 pub struct ChannelLoudnessMeter {
     /// The number of samples that fit in 100ms of audio.
@@ -174,7 +193,7 @@ pub struct ChannelLoudnessMeter {
     filter_stage2: Filter,
 
     /// Sum of the squares over non-overlapping windows of 100ms.
-    pub square_sum_windows: Vec<Power>,
+    windows: Windows100ms<Vec<Power>>,
 
     /// The number of samples in the current unfinished window.
     count: u32,
@@ -183,13 +202,14 @@ pub struct ChannelLoudnessMeter {
     square_sum: Sum,
 }
 
+/// Measures K-weighted power of non-overlapping 100ms windows of a single channel of audio.
 impl ChannelLoudnessMeter {
     pub fn new(sample_rate_hz: u32) -> ChannelLoudnessMeter {
         ChannelLoudnessMeter {
             samples_per_100ms: sample_rate_hz / 10,
             filter_stage1: Filter::high_shelf(sample_rate_hz as f32),
             filter_stage2: Filter::high_pass(sample_rate_hz as f32),
-            square_sum_windows: Vec::new(),
+            windows: Windows100ms(Vec::new()),
             count: 0,
             square_sum: Sum::zero(),
         }
@@ -215,7 +235,7 @@ impl ChannelLoudnessMeter {
             // TODO: Should this branch be marked cold?
             if self.count == self.samples_per_100ms {
                 let mean_squares = Power(self.square_sum.sum * normalizer);
-                self.square_sum_windows.push(mean_squares);
+                self.windows.0.push(mean_squares);
                 // We intentionally do not reset the residue. That way, leftover
                 // energy from this window is not lost, so for the file overall,
                 // the sum remains more accurate.
@@ -224,22 +244,46 @@ impl ChannelLoudnessMeter {
             }
         }
     }
+
+    /// Return a reference to the 100ms windows analyzed so far.
+    pub fn as_100ms_windows(&self) -> Windows100ms<&[Power]> {
+        self.windows.as_ref()
+    }
+
+    /// Return all 100ms windows analyzed so far.
+    pub fn into_100ms_windows(self) -> Windows100ms<Vec<Power>> {
+        self.windows
+    }
 }
 
-/// Reduce power for multiple channels by taking a weighted sum.
-pub fn reduce_stereo(left: &[Power], right: &[Power]) -> Vec<Power> {
-    assert_eq!(left.len(), right.len(), "Channels must have the same length.");
-    let mut result = Vec::with_capacity(left.len());
-    for (msl, msr) in left.iter().zip(right) {
-        // For stereo, both channels have equal weight, following table 3 from
-        // BS.1770-4. I find this strange, but the sum is not normalized, so
-        // stereo is inherently louder than mono. This makes sense if you play
-        // back on one vs. two speakers, but if you play back the mono signal on
-        // stereo speakers, it makes comparison unfair. There is however an
-        // offest built into the computations that compensates for this.
-        result.push(Power(msl.0 + msr.0));
+/// Combine power for multiple channels by taking a weighted sum.
+///
+/// Note that BS.1770-4 defines power for a multi-channel signal as a weighted
+/// sum over channels which is not normalized. This means that a stereo signal
+/// is inherently louder than a mono signal. For a mono signal played back on
+/// stereo speakers, you should therefore still apply `reduce_stereo`, passing
+/// in the same signal for both channels.
+pub fn reduce_stereo(
+    left: Windows100ms<&[Power]>,
+    right: Windows100ms<&[Power]>,
+) -> Windows100ms<Vec<Power>> {
+    assert_eq!(left.0.len(), right.0.len(), "Channels must have the same length.");
+    let mut result = Vec::with_capacity(left.0.len());
+    for (l, r) in left.0.iter().zip(right.0) {
+        result.push(Power(l.0 + r.0));
     }
-    result
+    Windows100ms(result)
+}
+
+/// In-place version of `reduce_stereo` that stores the result in the former left channel.
+pub fn reduce_stereo_in_place(
+    left: Windows100ms<&mut [Power]>,
+    right: Windows100ms<&[Power]>,
+) {
+    assert_eq!(left.0.len(), right.0.len(), "Channels must have the same length.");
+    for (l, r) in left.0.iter_mut().zip(right.0) {
+        l.0 += r.0;
+    }
 }
 
 /// Perform gating for an BS.1770-4 integrated loudness measurement.
@@ -247,14 +291,14 @@ pub fn reduce_stereo(left: &[Power], right: &[Power]) -> Vec<Power> {
 /// This loudness measurement is not simply the average over the windows, it
 /// performs two stages of gating to ensure that silent parts do not contribute
 /// to the measurment.
-pub fn gated_mean(windows_100ms: &[Power]) -> Power {
-    let mut gating_blocks = Vec::with_capacity(windows_100ms.len());
+pub fn gated_mean(windows_100ms: Windows100ms<&[Power]>) -> Power {
+    let mut gating_blocks = Vec::with_capacity(windows_100ms.0.len());
 
     // Stage 1: an absolute threshold of -70 LKFS. (Equation 6, p.6.)
     let absolute_threshold = Power::from_lkfs(-70.0);
 
     // Iterate over all 400ms windows.
-    for window in windows_100ms.windows(4) {
+    for window in windows_100ms.0.windows(4) {
         // Note that the sum over channels has already been performed at this point.
         let gating_block_power = Power(0.25 * window.iter().map(|mean| mean.0).sum::<f32>());
 
@@ -386,10 +430,10 @@ mod tests {
 
                 // The reference specifies a stereo signal with the same contents in
                 // both channels.
-                let windows_single = meter.square_sum_windows;
-                let windows_stereo = reduce_stereo(&windows_single, &windows_single);
+                let windows_single = meter.as_100ms_windows();
+                let windows_stereo = reduce_stereo(windows_single, windows_single);
 
-                let power = gated_mean(&windows_stereo);
+                let power = gated_mean(windows_stereo.as_ref());
                 assert_loudness_in_range_lkfs(
                     power, amplitude_dbfs, 0.1,
                     &format!(
@@ -442,9 +486,9 @@ mod tests {
                     );
                 }
                 meter.push(samples.iter().cloned());
-                let windows_single = meter.square_sum_windows;
-                let windows_stereo = reduce_stereo(&windows_single, &windows_single);
-                let power = gated_mean(&windows_stereo);
+                let windows_single = meter.as_100ms_windows();
+                let windows_stereo = reduce_stereo(windows_single.as_ref(), windows_single.as_ref());
+                let power = gated_mean(windows_stereo.as_ref());
                 assert_loudness_in_range_lkfs(
                     power, -23.0, 0.1,
                     &format!(
@@ -483,10 +527,10 @@ mod tests {
     }
 
     fn test_stereo_reference_file(fname: &str) {
-        let windows_ch0 = analyze_wav_channel(fname, 0).square_sum_windows;
-        let windows_ch1 = analyze_wav_channel(fname, 1).square_sum_windows;
-        let windows_stereo = reduce_stereo(&windows_ch0, &windows_ch1);
-        let power = gated_mean(&windows_stereo);
+        let windows_ch0 = analyze_wav_channel(fname, 0).into_100ms_windows();
+        let windows_ch1 = analyze_wav_channel(fname, 1).into_100ms_windows();
+        let windows_stereo = reduce_stereo(windows_ch0.as_ref(), windows_ch1.as_ref());
+        let power = gated_mean(windows_stereo.as_ref());
         // All of the reference samples have the same expected loudness of
         // -23 LKFS.
         assert_loudness_in_range_lkfs(power, -23.0, 0.1, fname);
