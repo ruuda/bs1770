@@ -79,7 +79,7 @@ impl AlbumResult {
 
             if album_needs_update || track_needs_update {
                 // Clear the current line, overwite it with the new message.
-                eprint!("\x1b[2K\rUpdating {} ...", path.to_string_lossy());
+                eprint!("\x1b[2K\rUpdating {} ... ", path.to_string_lossy());
                 io::stderr().flush()?;
                 write_new_tags(
                     &path,
@@ -174,7 +174,7 @@ fn analyze_file(file: fs::File) -> claxon::Result<TrackResult> {
 /// Return the start offset and length of the VORBIS_COMMENT block in the file.
 ///
 /// The start position and length do include the 4-byte block header.
-fn get_vorbis_comment_location(file: &mut fs::File) -> io::Result<Option<(u64, u64)>> {
+fn locate_vorbis_comment_block(file: &mut fs::File) -> io::Result<Option<(u64, u64)>> {
     let mut reader = io::BufReader::new(file);
 
     // The first 4 bytes are the flac header.
@@ -276,7 +276,93 @@ fn write_new_tags(
         block.write_all(comment.as_bytes())?;
     }
 
-    println!("TODO: Would update {}", path.to_string_lossy());
+    // Take the original file and seek back to the start, so we can locate the
+    // VORBIS_COMMENT block. We will make a copy with that block replaced.
+    let mut src_file = reader.into_inner();
+    src_file.seek(io::SeekFrom::Start(0))?;
+    let (offset, old_block_len) = match locate_vorbis_comment_block(&mut src_file)? {
+        Some(result) => result,
+        None => {
+            eprintln!(
+                "File {} does not have a VORBIS_COMMENT block yet.",
+                path.to_string_lossy(),
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let mut tmp_fname = path.to_path_buf();
+    tmp_fname.push(".metadata_edit");
+    let mut dst_file = fs::File::create(tmp_fname)?;
+
+    // Copy the part up to the VORBIS_COMMENT block. The offset starts at 0, the
+    // length is 1 more than the offset, we also want the first byte of the
+    // block header.
+    copy_file_range(&src_file, &mut dst_file, 0, offset + 1)?;
+
+    // We already have the first byte of the block header, the remaining 3 bytes
+    // of that header are the block size, in big endian. Prepend that to the
+    // block, then write the block.
+    let block_length_u24be = [
+        (block.len() >> 16) as u8,
+        (block.len() >>  8) as u8,
+        (block.len() >>  0) as u8,
+    ];
+    block.splice(0..0, block_length_u24be.iter().cloned());
+    dst_file.write_all(&block)?;
+
+    // After the new VORBIS_COMMENT block, copy the remainder of the old file.
+    let src_len = src_file.metadata()?.len();
+    let tail_offset = offset + old_block_len;
+    copy_file_range(&src_file, &mut dst_file, tail_offset, src_len - tail_offset)?;
+
+    // TODO: Rename the new file over the old file.
+
+    Ok(())
+}
+
+fn copy_file_range(
+    file_in: &fs::File,
+    file_out: &mut fs::File,
+    off_in: u64,
+    len: u64,
+) -> io::Result<()> {
+    use std::ptr;
+    use std::os::unix::io::AsRawFd;
+
+    let mut num_left = len as usize;
+    let mut off = off_in as i64;
+
+    while num_left > 0 {
+        let num_copied = unsafe {
+            // We do specify the offset to copy from, but we set the offset to
+            // copy to to null, which means write at the current write position
+            // (and update it).
+            let off_in = &mut off as *mut libc::off64_t;
+            let off_out = ptr::null_mut();
+            let flags = 0;
+
+            libc::copy_file_range(
+                file_in.as_raw_fd(), off_in,
+                file_out.as_raw_fd(), off_out,
+                num_left,
+                flags,
+            )
+        };
+
+        if num_copied < 0 {
+            let err = io::Error::last_os_error();
+            return Err(err);
+        }
+
+        if num_copied == 0 {
+            let err = io::Error::new(io::ErrorKind::Other, "Failed to copy full range");
+            return Err(err);
+        }
+
+        // This does not overflow, because `num_copied > 0`.
+        num_left -= num_copied as usize;
+    }
 
     Ok(())
 }

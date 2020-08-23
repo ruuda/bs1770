@@ -12,6 +12,9 @@ claxon = "0.4.3"
 # For loading the EBU Tech 3441 reference samples in the test suite.
 hound = "3.4.0"
 
+# For copy_file_range, to be able to update metadata while preserving sharing.
+libc = "0.2.76"
+
 [profile.dev]
 panic = "abort"
 
