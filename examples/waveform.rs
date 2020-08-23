@@ -51,10 +51,16 @@ fn main() -> claxon::Result<()> {
 
     let mut max = 0.0;
 
+    // Extract just the power measurements from the meters.
+    let meters: Vec<_> = meters.drain(..).map(|m| m.into_100ms_windows()).collect();
+
     for (ch, meter) in meters.iter().enumerate() {
-        // Measure power over windows of 2s long, and sample such windows at 2 Hz.
-        for window_2s in meter.as_100ms_windows().inner.windows(20).step_by(5) {
-            let power = 0.05 * window_2s.iter().map(|po| po.0).sum::<f32>();
+        // Measure power over windows of 0.5s long, and sample such windows at
+        // 10 Hz. The 0.5s window provides a good trade-off between graphs that
+        // are too spiky to see at a glance, and graphs that are too smeared out
+        // to have any detail.
+        for window_2s in meter.inner.windows(5) {
+            let power = 0.2 * window_2s.iter().map(|po| po.0).sum::<f32>();
             if power > max { 
                 max = power;
             }
@@ -65,18 +71,21 @@ fn main() -> claxon::Result<()> {
     let n = amplitudes[0].len();
 
     println!(
-        r#"<svg width="{}" height="20" xmlns="http://www.w3.org/2000/svg">"#, n
+        r#"<svg width="{:.1}" height="10" xmlns="http://www.w3.org/2000/svg">"#,
+        n as f32 * 0.1
     );
     println!(r#"<path d="M 0 10 "#);
 
     for (i, amplitude) in amplitudes[0].iter().enumerate() {
-        let y = 10.0 - 10.0 * (amplitude / max).sqrt();
-        print!("L {:.1} {:.1} ", i as f32 * 0.5, y);
+        let y = 5.0 - 5.0 * (amplitude / max + 1e-10).sqrt();
+        assert_eq!(y, y);
+        print!("L {:.1} {:.1} ", i as f32 * 0.1, y);
     }
 
     for (i, amplitude) in amplitudes[1].iter().enumerate().rev() {
-        let y = 10.0 + 10.0 * (amplitude / max).sqrt();
-        print!("L {:.1} {:.1} ", i as f32 * 0.5, y);
+        let y = 5.0 + 5.0 * (amplitude / max + 1e-10).sqrt();
+        assert_eq!(y, y);
+        print!("L {:.1} {:.1} ", i as f32 * 0.1, y);
     }
 
     println!(r#"" fill="black"/></svg>"#);
