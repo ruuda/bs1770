@@ -11,7 +11,7 @@ extern crate claxon;
 use std::fs;
 use std::io::{Read, Seek, Write};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use claxon::FlacReader;
 use bs1770::{Power, Windows100ms};
@@ -86,7 +86,7 @@ fn analyze_album(paths: Vec<PathBuf>) -> claxon::Result<AlbumResult> {
 
 /// Measure loudness of a single track.
 fn analyze_file(file: fs::File) -> claxon::Result<TrackResult> {
-    let mut reader = claxon::FlacReader::new(file)?;
+    let mut reader = FlacReader::new(file)?;
 
     let streaminfo = reader.streaminfo();
     // The maximum amplitude is 1 << (bits per sample - 1), because one bit
@@ -162,6 +162,74 @@ fn get_vorbis_comment_location(file: &mut fs::File) -> io::Result<Option<(u64, u
     Ok(None)
 }
 
+/// Update the tags in the file to contain BS.1770 loudness tags.
+///
+/// This adds or overwrites the following tags:
+///
+/// * `BS1770_TRACK_LOUDNESS`
+/// * `BS1770_ALBUM_LOUDNESS`
+///
+/// This first writes a copy of the original file, with tags updated, and then
+/// moves the new file over the existing one. This uses `copy_file_range` to
+/// take advantage of reflink copies on file systems that support this.
+fn write_new_tags(
+    path: &Path,
+    track_loudness_lkfs: f32,
+    album_loudness_lkfs: f32,
+    reader: FlacReader<fs::File>,
+) -> io::Result<()> {
+    // Tags to not copy from the existing tags, either because we no longer need
+    // them, or because we are going to provide replacements.
+    let exclude_tags = [
+        "BS1770_ALBUM_LOUDNESS",
+        "BS1770_TRACK_LOUDNESS",
+        "REPLAYGAIN_ALBUM_GAIN",
+        "REPLAYGAIN_ALBUM_PEAK",
+        "REPLAYGAIN_REFERENCE_LOUDNESS",
+        "REPLAYGAIN_TRACK_GAIN",
+        "REPLAYGAIN_TRACK_PEAK",
+    ];
+
+    let mut vorbis_comments = Vec::with_capacity(reader.tags().len() + 2);
+
+    // Copy all non-excluded tags.
+    for (key, value) in reader.tags() {
+        if exclude_tags.iter().any(|t| t == &key) { continue }
+
+        // TODO: If I expose the raw string including = from Claxon, I could use
+        // it here without having to make a copy.
+        let mut pair = String::with_capacity(key.len() + value.len() + 1);
+        pair.push_str(key);
+        pair.push('=');
+        pair.push_str(value);
+        vorbis_comments.push(pair);
+    }
+
+    // Then add our own.
+    vorbis_comments.push(
+        format!("BS1770_ALBUM_LOUDNESS={:.3} LUFS", album_loudness_lkfs)
+    );
+    vorbis_comments.push(
+        format!("BS1770_TRACK_LOUDNESS={:.3} LUFS", track_loudness_lkfs)
+    );
+
+    let mut block = Vec::new();
+
+    // The block starts with the length-prefixed vendor string as UTF-8.
+    let vendor = reader.vendor().expect("Expected VORBIS_COMMENT block to be present.");
+    block.write_all(&(vendor.len() as u32).to_le_bytes())?;
+    block.write_all(vendor.as_bytes())?;
+
+    // Then the length-prefixed list of Vorbis comments follows.
+    block.write_all(&(vorbis_comments.len() as u32).to_le_bytes())?;
+    for comment in vorbis_comments {
+        block.write_all(&(comment.len() as u32).to_le_bytes())?;
+        block.write_all(comment.as_bytes())?;
+    }
+
+    Ok(())
+}
+
 fn main() {
     // Skip the name of the binary itself.
     let fnames = std::env::args().skip(1).map(PathBuf::from).collect();
@@ -175,4 +243,3 @@ fn main() {
 
     album_result.print();
 }
-
