@@ -55,6 +55,7 @@ impl AlbumResult {
     /// Write tags for the tracks that do not have the correct tags yet.
     fn write_tags(self) -> io::Result<()> {
         let new_album_loudness_lkfs = self.gated_power.loudness_lkfs();
+        let mut num_files_updated = 0_u32;
 
         for (path, track_gated_power, reader) in self.tracks {
             let new_track_loudness_lkfs = track_gated_power.loudness_lkfs();
@@ -87,8 +88,12 @@ impl AlbumResult {
                     new_album_loudness_lkfs,
                     reader,
                 )?;
+                num_files_updated += 1;
             }
         }
+
+        // Clear the current line again, print the final status.
+        eprintln!("\x1b[2K\rUpdated {} files.", num_files_updated);
 
         Ok(())
     }
@@ -202,7 +207,10 @@ fn locate_vorbis_comment_block(file: &mut fs::File) -> io::Result<Option<(u64, u
             ;
 
         if is_vorbis_comment {
-            return Ok(Some((pos, block_length)));
+            // The stored length does not include the length of the 4-byte
+            // header, but we do include it here, because we want to replace the
+            // entire block, including its header.
+            return Ok(Some((pos, block_length + 4)));
         } else {
             reader.seek(io::SeekFrom::Current(block_length as i64))?;
         }
@@ -292,7 +300,7 @@ fn write_new_tags(
     };
 
     let mut tmp_fname = path.to_path_buf();
-    tmp_fname.push(".metadata_edit");
+    tmp_fname.set_extension("flac.metadata_edit");
     let mut dst_file = fs::File::create(tmp_fname)?;
 
     // Copy the part up to the VORBIS_COMMENT block. The offset starts at 0, the
@@ -304,9 +312,9 @@ fn write_new_tags(
     // of that header are the block size, in big endian. Prepend that to the
     // block, then write the block.
     let block_length_u24be = [
-        (block.len() >> 16) as u8,
-        (block.len() >>  8) as u8,
-        (block.len() >>  0) as u8,
+        ((block.len() >> 16) & 0xff) as u8,
+        ((block.len() >>  8) & 0xff) as u8,
+        ((block.len() >>  0) & 0xff) as u8,
     ];
     block.splice(0..0, block_length_u24be.iter().cloned());
     dst_file.write_all(&block)?;
