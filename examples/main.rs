@@ -8,6 +8,7 @@
 extern crate bs1770;
 extern crate claxon;
 
+use std::str::FromStr;
 use std::fs;
 use std::io::{Read, Seek, Write};
 use std::io;
@@ -33,6 +34,7 @@ struct AlbumResult {
 }
 
 impl AlbumResult {
+    /// Print a summary of the loudness analysis, per track and for the album.
     fn print(&self) {
         for &(ref path, track_gated_power, ref _reader) in &self.tracks {
             println!(
@@ -49,6 +51,53 @@ impl AlbumResult {
             self.gated_power.loudness_lkfs(),
         );
     }
+
+    /// Write tags for the tracks that do not have the correct tags yet.
+    fn write_tags(self) -> io::Result<()> {
+        let new_album_loudness_lkfs = self.gated_power.loudness_lkfs();
+
+        for (path, track_gated_power, reader) in self.tracks {
+            let new_track_loudness_lkfs = track_gated_power.loudness_lkfs();
+
+            // If both the album loudness and track loudness are already
+            // present, and they are within 0.1 loudness unit of the value that
+            // we computed, then do not rewrite the tags.
+
+            let album_needs_update = reader
+                .get_tag("BS17704_ALBUM_LOUDNESS")
+                .next()
+                .and_then(parse_lufs)
+                .map(|current_lkfs| (new_album_loudness_lkfs - current_lkfs).abs() > 0.1)
+                .unwrap_or(true);
+
+            let track_needs_update = reader
+                .get_tag("BS17704_TRACK_LOUDNESS")
+                .next()
+                .and_then(parse_lufs)
+                .map(|current_lkfs| (new_track_loudness_lkfs - current_lkfs).abs() > 0.1)
+                .unwrap_or(true);
+
+            if album_needs_update || track_needs_update {
+                // Clear the current line, overwite it with the new message.
+                eprint!("\x1b[2K\rUpdating {} ...", path.to_string_lossy());
+                io::stderr().flush()?;
+                write_new_tags(
+                    &path,
+                    new_track_loudness_lkfs,
+                    new_album_loudness_lkfs,
+                    reader,
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Parse a numeric value with “LUFS” suffix from a metadata tag.
+fn parse_lufs(value: &str) -> Option<f32> {
+    let num = value.strip_suffix(" LUFS")?;
+    f32::from_str(num).ok()
 }
 
 /// Measure loudness of an album.
@@ -181,8 +230,8 @@ fn write_new_tags(
     // Tags to not copy from the existing tags, either because we no longer need
     // them, or because we are going to provide replacements.
     let exclude_tags = [
-        "BS1770_ALBUM_LOUDNESS",
-        "BS1770_TRACK_LOUDNESS",
+        "BS17704_ALBUM_LOUDNESS",
+        "BS17704_TRACK_LOUDNESS",
         "REPLAYGAIN_ALBUM_GAIN",
         "REPLAYGAIN_ALBUM_PEAK",
         "REPLAYGAIN_REFERENCE_LOUDNESS",
@@ -207,10 +256,10 @@ fn write_new_tags(
 
     // Then add our own.
     vorbis_comments.push(
-        format!("BS1770_ALBUM_LOUDNESS={:.3} LUFS", album_loudness_lkfs)
+        format!("BS17704_ALBUM_LOUDNESS={:.3} LUFS", album_loudness_lkfs)
     );
     vorbis_comments.push(
-        format!("BS1770_TRACK_LOUDNESS={:.3} LUFS", track_loudness_lkfs)
+        format!("BS17704_TRACK_LOUDNESS={:.3} LUFS", track_loudness_lkfs)
     );
 
     let mut block = Vec::new();
@@ -227,12 +276,24 @@ fn write_new_tags(
         block.write_all(comment.as_bytes())?;
     }
 
+    println!("TODO: Would update {}", path.to_string_lossy());
+
     Ok(())
 }
 
 fn main() {
+    let mut fnames = Vec::new();
+    let mut write_tags = false;
+
     // Skip the name of the binary itself.
-    let fnames = std::env::args().skip(1).map(PathBuf::from).collect();
+    for arg in std::env::args().skip(1) {
+        if arg == "--write-tags" {
+            write_tags = true;
+        } else {
+            fnames.push(PathBuf::from(arg));
+        }
+    }
+
     let album_result = match analyze_album(fnames) {
         Ok(r) => r,
         Err(e) => {
@@ -242,4 +303,14 @@ fn main() {
     };
 
     album_result.print();
+
+    if write_tags {
+        match album_result.write_tags() {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("Failed to update tags: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
 }
