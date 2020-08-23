@@ -301,7 +301,7 @@ fn write_new_tags(
 
     let mut tmp_fname = path.to_path_buf();
     tmp_fname.set_extension("flac.metadata_edit");
-    let mut dst_file = fs::File::create(tmp_fname)?;
+    let mut dst_file = fs::File::create(&tmp_fname)?;
 
     // Copy the part up to the VORBIS_COMMENT block. The offset starts at 0, the
     // length is 1 more than the offset, we also want the first byte of the
@@ -324,9 +324,9 @@ fn write_new_tags(
     let tail_offset = offset + old_block_len;
     copy_file_range(&src_file, &mut dst_file, tail_offset, src_len - tail_offset)?;
 
-    // TODO: Rename the new file over the old file.
-
-    Ok(())
+    // Now that we produced the new file with a temporary name, move it over the
+    // old file.
+    fs::rename(&tmp_fname, &path)
 }
 
 fn copy_file_range(
