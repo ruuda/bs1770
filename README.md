@@ -2,9 +2,46 @@
 
 A Rust library that implements ITU-R BS.1770-4 loudness measurement.
 
+Also includes a binary that writes loudness to flac tags.
+
 ## Example
 
 TODO
+
+## Tagging flac files
+
+There is a binary `flacgain` included in the `examples` directory, build it with
+
+    RUSTFLAGS="-C target-cpu=native" cargo build --release --example flacgain
+
+Then run
+
+    target/release/examples/flacgain FILE...
+
+The program accepts file names or more flac files as arguments, and computes
+loudness for them, as well as for the collection of files (which is assumed to
+be an album).
+
+By default the program only prints loudness to stdout, add the `--write-tags`
+flag to also store loudness in the metadata tags. This adds the following tags:
+
+ * `BS17704_TRACK_LOUDNESS`
+ * `BS17704_ALBUM_LOUDNESS`
+
+If any `REPLAYGAIN_*` tags exist, the program will remove these. The rationale
+for these tags, instead of using ReplayGain, is that ReplayGain has become
+ambigous: it stores a gain (the difference between target loudness and measured
+loudness), but different taggers use different reference levels, which means
+that ReplayGain only normalizes loudness when you carefull ensure that all files
+in your collection use the same target setting. By storing the loudness instead
+of the gain, sidestep the problem. By naming the tag after the particular
+loudness definition (BS.1770-4), future revisions of BS.1770 will not make these
+tags ambiguous.
+
+The program writes a new file and moves it over the old file, so permission bits
+are currently lost. The program only replaces the `VORBIS_COMMENT` block and
+leaves any other parts of the file untouched. It uses `copy_file_range` to
+enable reflinking on file systems that support this.
 
 ## Performance
 
