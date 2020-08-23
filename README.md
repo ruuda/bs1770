@@ -43,6 +43,10 @@ are currently lost. The program only replaces the `VORBIS_COMMENT` block and
 leaves any other parts of the file untouched. It uses `copy_file_range` to
 enable reflinking on file systems that support this.
 
+If you have a collection of flac files, where every leaf directory contains a
+single album, you can use the included script `tag_collection.sh` to run
+`flacgain --write-tags` on every album in your collection.
+
 ## Performance
 
 The initial focus is on correctness, the library has not been optimized yet.
