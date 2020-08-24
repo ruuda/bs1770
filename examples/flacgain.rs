@@ -106,7 +106,7 @@ fn parse_lufs(value: &str) -> Option<f32> {
 }
 
 /// Measure loudness of an album.
-fn analyze_album(paths: Vec<PathBuf>) -> claxon::Result<AlbumResult> {
+fn analyze_album(paths: Vec<PathBuf>, skip_when_tags_present: bool) -> claxon::Result<AlbumResult> {
     let mut windows = Windows100ms::new();
     let mut tracks = Vec::with_capacity(paths.len());
 
@@ -115,7 +115,18 @@ fn analyze_album(paths: Vec<PathBuf>) -> claxon::Result<AlbumResult> {
         eprint!("\x1b[2K\rAnalyzing {} ...", path.to_string_lossy());
         io::stderr().flush()?;
 
-        let file = fs::File::open(&path)?;
+        let file = FlacReader::open(&path)?;
+
+        // If the --skip-when-tags-present flag is passed, we early out on files
+        // where the tag is already present, regardless of the current value.
+        if skip_when_tags_present {
+            let has_track_tag = file.get_tag("bs17704_track_loudness").next().is_some();
+            let has_album_tag = file.get_tag("bs17704_album_loudness").next().is_some();
+            if has_track_tag && has_album_tag {
+                continue
+            }
+        }
+
         let track_result = match analyze_file(file) {
             Ok(r) => r,
             Err(e) => {
@@ -139,9 +150,7 @@ fn analyze_album(paths: Vec<PathBuf>) -> claxon::Result<AlbumResult> {
 }
 
 /// Measure loudness of a single track.
-fn analyze_file(file: fs::File) -> claxon::Result<TrackResult> {
-    let mut reader = FlacReader::new(file)?;
-
+fn analyze_file(mut reader: FlacReader<fs::File>) -> claxon::Result<TrackResult> {
     let streaminfo = reader.streaminfo();
     // The maximum amplitude is 1 << (bits per sample - 1), because one bit
     // is the sign bit.
@@ -378,17 +387,20 @@ fn copy_file_range(
 fn main() {
     let mut fnames = Vec::new();
     let mut write_tags = false;
+    let mut skip_when_tags_present = false;
 
     // Skip the name of the binary itself.
     for arg in std::env::args().skip(1) {
         if arg == "--write-tags" {
             write_tags = true;
+        } else if arg == "--skip-when-tags-present" {
+            skip_when_tags_present = true;
         } else {
             fnames.push(PathBuf::from(arg));
         }
     }
 
-    let album_result = match analyze_album(fnames) {
+    let album_result = match analyze_album(fnames, skip_when_tags_present) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to analzye album: {}", e);

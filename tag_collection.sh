@@ -21,4 +21,5 @@ find $1 -type d \
   | sort -r \
   | awk 'index(a, $0) != 1 { a = $0; print }' \
   | parallel --bar --jobs '+8' \
-    find {} -type f -name '*.flac' -execdir "${flacgain}" --write-tags '\{\}' '+'
+    find {} -type f -name '*.flac' -execdir \
+    "${flacgain}" --skip-when-tags-present --write-tags '\{\}' '+'
