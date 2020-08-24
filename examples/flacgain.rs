@@ -46,14 +46,20 @@ impl AlbumResult {
                     .to_string_lossy(),
             );
         }
-        println!(
-            "{:>5.1} LKFS  ALBUM",
-            self.gated_power.loudness_lkfs(),
-        );
+        if self.tracks.len() > 0 {
+            println!(
+                "{:>5.1} LKFS  ALBUM",
+                self.gated_power.loudness_lkfs(),
+            );
+        }
     }
 
     /// Write tags for the tracks that do not have the correct tags yet.
     fn write_tags(self) -> io::Result<()> {
+        if self.tracks.len() == 0 {
+            return Ok(())
+        }
+
         let new_album_loudness_lkfs = self.gated_power.loudness_lkfs();
         let mut num_files_updated = 0_u32;
 
