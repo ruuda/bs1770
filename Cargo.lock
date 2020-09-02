@@ -2,7 +2,7 @@
 # It is not intended for manual editing.
 [[package]]
 name = "bs1770"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "claxon 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "hound 3.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
