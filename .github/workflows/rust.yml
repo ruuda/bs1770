@@ -1,0 +1,38 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: "always"
+
+jobs:
+  build:
+
+    runs-on: "ubuntu-latest"
+
+    steps:
+    - uses: "actions/checkout@v2"
+
+    # Download the reference data from GitHub's cache, instead of from the EBU
+    # servers, to avoid unexpected egress for their servers; the GitHub cache is
+    # made for it, it should be able to handle a 90 MB file.
+    - name: "Obtain cached reference data for tests"
+      uses: "actions/cache@v2.0.0"
+      with:
+        path: "ebu-loudness-test-setv05.zip"
+        key: "ebu-loudness-test-setv05"
+
+    # This only downloads the file if it does not yet exist.
+    - name: "Obtain reference data for tests"
+      run: "./download_test_data.sh"
+
+    - name: "Build"
+      run: "cargo build --verbose"
+
+    - name: "Run tests"
+      run: "cargo test --verbose"
+
