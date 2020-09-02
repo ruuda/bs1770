@@ -5,16 +5,41 @@
 // you may not use this file except in compliance with the License.
 // A copy of the License has been included in the root of the repository.
 
-//! Loudness analysis conforming to ITU-R BS.1770-4.
+//! Loudness analysis conforming to [ITU-R BS.1770-4][bs17704].
 //!
 //! This library offers the building blocks to perform BS.1770 loudness
 //! measurements, but you need to put the pieces together yourself.
 //!
-//! # Example
+//! [bs17704]: https://www.itu.int/rec/R-REC-BS.1770-4-201510-I/en
+//!
+//! # Stereo integrated loudness example
 //!
 //! ```
-//! // TODO.
-//! // For now, start with `ChannelLoudnessMeter.
+//! # fn load_stereo_audio() -> [Vec<i16>; 2] {
+//! #     [vec![0; 48_000], vec![0; 48_000]]
+//! # }
+//! #
+//! let sample_rate_hz = 44_100;
+//! let bits_per_sample = 16;
+//! let channel_samples: [Vec<i16>; 2] = load_stereo_audio();
+//!
+//! // When converting integer samples to float, note that the maximum amplitude
+//! // is `1 << (bits_per_sample - 1)`, one bit is the sign bit.
+//! let normalizer = 1.0 / (1_u64 << (bits_per_sample - 1)) as f32;
+//!
+//! let channel_power: Vec<_> = channel_samples.iter().map(|samples| {
+//!     let mut meter = bs1770::ChannelLoudnessMeter::new(sample_rate_hz);
+//!     meter.push(samples.iter().map(|&s| s as f32 * normalizer));
+//!     meter.into_100ms_windows()
+//! }).collect();
+//!
+//! let stereo_power = bs1770::reduce_stereo(
+//!     channel_power[0].as_ref(),
+//!     channel_power[1].as_ref(),
+//! );
+//!
+//! let gated_power = bs1770::gated_mean(stereo_power.as_ref());
+//! println!("Integrated loudness: {:.1} LUFS", gated_power.loudness_lkfs());
 //! ```
 
 use std::f32;
@@ -130,7 +155,7 @@ impl Sum {
 /// The mean of the squares of the K-weighted samples in a window of time.
 ///
 /// K-weighted power is equivalent to K-weighted loudness, the only difference
-/// is one of scale: power is linear in sample amplitudes, whereas loudness
+/// is one of scale: power is quadratic in sample amplitudes, whereas loudness
 /// units are logarithmic. `loudness_lkfs` and `from_lkfs` convert between power,
 /// and K-weighted Loudness Units relative to nominal Full Scale (LKFS).
 ///
@@ -174,7 +199,7 @@ impl Power {
     }
 }
 
-/// K-weighted power for non-overlapping windows of audio, 100ms in length.
+/// A `T` value for non-overlapping windows of audio, 100ms in length.
 ///
 /// The `ChannelLoudnessMeter` applies K-weighting and then produces the power
 /// for non-overlapping windows of 100ms duration.

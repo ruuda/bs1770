@@ -1,12 +1,34 @@
 # BS1770
 
-A Rust library that implements ITU-R BS.1770-4 loudness measurement.
+A Rust library that implements [ITU-R BS.1770-4][bs1770] loudness measurement.
 
 Also includes a binary that writes loudness to flac tags.
 
 ## Example
 
-TODO
+```rust
+let sample_rate_hz = 44_100;
+let bits_per_sample = 16;
+let channel_samples: [Vec<i16>; 2] = load_stereo_audio();
+
+// When converting integer samples to float, note that the maximum amplitude
+// is `1 << (bits_per_sample - 1)`, one bit is the sign bit.
+let normalizer = 1.0 / (1_u64 << (bits_per_sample - 1)) as f32;
+
+let channel_power: Vec<_> = channel_samples.iter().map(|samples| {
+    let mut meter = bs1770::ChannelLoudnessMeter::new(sample_rate_hz);
+    meter.push(samples.iter().map(|&s| s as f32 * normalizer));
+    meter.into_100ms_windows()
+}).collect();
+
+let stereo_power = bs1770::reduce_stereo(
+    channel_power[0].as_ref(),
+    channel_power[1].as_ref(),
+);
+
+let gated_power = bs1770::gated_mean(stereo_power.as_ref());
+println!("Integrated loudness: {:.1} LUFS", gated_power.loudness_lkfs());
+```
 
 ## Tagging flac files
 
