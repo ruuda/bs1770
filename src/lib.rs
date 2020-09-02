@@ -264,13 +264,13 @@ impl<T> Windows100ms<T> {
 ///
 /// The instantaneous loudness is the power over a 400ms window, so you can
 /// average four 100ms windows. No special functionality is implemented to help
-/// with that at this time. (TODO)
+/// with that at this time. ([Pull requests would be accepted.][contribute])
 ///
 /// # Momentary loudness
 ///
 /// The momentary loudness is the power over a 3-second window, so you can
 /// average thirty 100ms windows. No special functionality is implemented to
-/// help with that at this time. (TODO)
+/// help with that at this time. ([Pull requests would be accepted.][contribute])
 ///
 /// # Integrated loudness
 ///
@@ -285,6 +285,8 @@ impl<T> Windows100ms<T> {
 /// # meter.push((0..44_100).map(|i| (i as f32 * 0.01).sin()));
 /// let integrated_loudness_lkfs = gated_mean(meter.as_100ms_windows()).loudness_lkfs();
 /// ```
+///
+/// [contribute]: https://github.com/ruuda/bs1770/blob/master/CONTRIBUTING.md
 #[derive(Clone)]
 pub struct ChannelLoudnessMeter {
     /// The number of samples that fit in 100ms of audio.
