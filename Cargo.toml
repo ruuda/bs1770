@@ -1,9 +1,18 @@
 [package]
 name = "bs1770"
+description = "Loudness analysis conforming to ITU-R BS.1770-4"
+categories = ["multimedia::audio"]
+keywords = ["bs1770", "audio", "loudness"]
+
 version = "1.0.0"
-authors = ["Ruud van Asseldonk <dev@veniogames.com>"]
 edition = "2018"
+authors = ["Ruud van Asseldonk <dev@veniogames.com>"]
 license = "Apache-2.0"
+
+homepage = "https://github.com/ruuda/bs1770#readme"
+repository = "https://github.com/ruuda/bs1770"
+documentation = "https://docs.rs/bs1770"
+readme = "README.md"
 
 [dev-dependencies]
 # For the album loudness analysis example.
