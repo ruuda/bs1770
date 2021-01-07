@@ -56,7 +56,7 @@ ambigous: it stores a gain (the difference between target loudness and measured
 loudness), but different taggers use different reference levels, which means
 that ReplayGain only normalizes loudness when you carefully ensure that all files
 in your collection use the same target setting. By storing the loudness instead
-of the gain, sidestep the problem. By naming the tag after the particular
+of the gain, we sidestep the problem. By naming the tag after the particular
 loudness definition (BS.1770-4), future revisions of BS.1770 will not make these
 tags ambiguous.
 
