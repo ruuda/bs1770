@@ -688,4 +688,12 @@ mod tests {
     fn loudness_matches_tech_3341_2016_case_8() {
         test_stereo_reference_file("tech_3341_test_case_8.wav");
     }
+
+    #[test]
+    fn loudness_of_zero_power_is_negative_infinity() {
+        let zero_power = Power(0.0);
+        let loudness = zero_power.loudness_lkfs();
+        assert!(loudness.is_infinite());
+        assert!(loudness < 0.0);
+    }
 }
