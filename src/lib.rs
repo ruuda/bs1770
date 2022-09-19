@@ -38,7 +38,9 @@
 //!     channel_power[1].as_ref(),
 //! );
 //!
-//! let gated_power = bs1770::gated_mean(stereo_power.as_ref());
+//! let gated_power = bs1770::gated_mean(
+//!     stereo_power.as_ref()
+//! ).unwrap_or(bs1770::Power(0.0));
 //! println!("Integrated loudness: {:.1} LUFS", gated_power.loudness_lkfs());
 //! ```
 
@@ -283,7 +285,9 @@ impl<T> Windows100ms<T> {
 /// # let samples_per_100ms = sample_rate_hz / 10;
 /// # let mut meter = ChannelLoudnessMeter::new(sample_rate_hz);
 /// # meter.push((0..44_100).map(|i| (i as f32 * 0.01).sin()));
-/// let integrated_loudness_lkfs = gated_mean(meter.as_100ms_windows()).loudness_lkfs();
+/// let integrated_loudness_lkfs = gated_mean(meter.as_100ms_windows())
+///     .unwrap_or(bs1770::Power(0.0))
+///     .loudness_lkfs();
 /// ```
 ///
 /// [contribute]: https://github.com/ruuda/bs1770/blob/master/CONTRIBUTING.md
@@ -434,7 +438,11 @@ pub fn reduce_stereo_in_place(
 /// average power over the windows that were not excluded.
 ///
 /// The result of this function is the integrated loudness measurement.
-pub fn gated_mean(windows_100ms: Windows100ms<&[Power]>) -> Power {
+///
+/// When no signal remains after applying the gate, this function returns
+/// `None`. In particular, this happens when all of the signal is softer than
+/// -70 LKFS, including a signal that consists of pure silence.
+pub fn gated_mean(windows_100ms: Windows100ms<&[Power]>) -> Option<Power> {
     let mut gating_blocks = Vec::with_capacity(windows_100ms.len());
 
     // Stage 1: an absolute threshold of -70 LKFS. (Equation 6, p.6.)
@@ -448,6 +456,10 @@ pub fn gated_mean(windows_100ms: Windows100ms<&[Power]>) -> Power {
         if gating_block_power > absolute_threshold {
             gating_blocks.push(gating_block_power);
         }
+    }
+
+    if gating_blocks.len() == 0 {
+        return None;
     }
 
     // Compute the loudness after applying the absolute gate, in order to
@@ -468,14 +480,18 @@ pub fn gated_mean(windows_100ms: Windows100ms<&[Power]>) -> Power {
             n_blocks += 1;
         }
     }
-    let relative_gated_power = Power(sum_power.sum / n_blocks as f32);
 
-    relative_gated_power
+    if n_blocks == 0 {
+        return None;
+    }
+
+    let relative_gated_power = Power(sum_power.sum / n_blocks as f32);
+    Some(relative_gated_power)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelLoudnessMeter, Filter, Power};
+    use super::{ChannelLoudnessMeter, Filter, Power, Windows100ms};
     use super::{reduce_stereo, gated_mean};
 
     #[test]
@@ -576,7 +592,7 @@ mod tests {
                 let windows_single = meter.as_100ms_windows();
                 let windows_stereo = reduce_stereo(windows_single, windows_single);
 
-                let power = gated_mean(windows_stereo.as_ref());
+                let power = gated_mean(windows_stereo.as_ref()).unwrap();
                 assert_loudness_in_range_lkfs(
                     power, amplitude_dbfs, 0.1,
                     &format!(
@@ -631,7 +647,7 @@ mod tests {
                 meter.push(samples.iter().cloned());
                 let windows_single = meter.as_100ms_windows();
                 let windows_stereo = reduce_stereo(windows_single.as_ref(), windows_single.as_ref());
-                let power = gated_mean(windows_stereo.as_ref());
+                let power = gated_mean(windows_stereo.as_ref()).unwrap();
                 assert_loudness_in_range_lkfs(
                     power, -23.0, 0.1,
                     &format!(
@@ -673,7 +689,7 @@ mod tests {
         let windows_ch0 = analyze_wav_channel(fname, 0).into_100ms_windows();
         let windows_ch1 = analyze_wav_channel(fname, 1).into_100ms_windows();
         let windows_stereo = reduce_stereo(windows_ch0.as_ref(), windows_ch1.as_ref());
-        let power = gated_mean(windows_stereo.as_ref());
+        let power = gated_mean(windows_stereo.as_ref()).unwrap();
         // All of the reference samples have the same expected loudness of
         // -23 LKFS.
         assert_loudness_in_range_lkfs(power, -23.0, 0.1, fname);
@@ -695,5 +711,18 @@ mod tests {
         let loudness = zero_power.loudness_lkfs();
         assert!(loudness.is_infinite());
         assert!(loudness < 0.0);
+    }
+
+    #[test]
+    fn gated_mean_of_empty_is_none() {
+        assert!(gated_mean(Windows100ms { inner: &[] }).is_none());
+    }
+
+    #[test]
+    fn gated_mean_of_near_silence_is_none() {
+        let below_abs_threshold = Power::from_lkfs(-71.0);
+        assert!(gated_mean(Windows100ms {
+            inner: &[below_abs_threshold; 10]
+        }).is_none());
     }
 }

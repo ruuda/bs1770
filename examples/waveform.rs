@@ -38,12 +38,6 @@ fn main() -> claxon::Result<()> {
         buffer = block.into_buffer();
     }
 
-    let zipped = bs1770::reduce_stereo(
-        meters[0].as_100ms_windows(),
-        meters[1].as_100ms_windows(),
-    );
-    let mean_power = bs1770::gated_mean(zipped.as_ref());
-
     let mut amplitudes: Vec<Vec<_>> = meters
         .iter()
         .map(|m| Vec::with_capacity(m.as_100ms_windows().len()))

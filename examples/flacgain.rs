@@ -147,9 +147,10 @@ fn analyze_album(paths: Vec<PathBuf>, skip_when_tags_present: bool) -> claxon::R
     // Clear the current line again.
     eprint!("\x1b[2K\r");
 
+    let gated_power = bs1770::gated_mean(windows.as_ref()).unwrap_or(Power(0.0));
     let result = AlbumResult {
         tracks: tracks,
-        gated_power: bs1770::gated_mean(windows.as_ref()),
+        gated_power: gated_power,
     };
 
     Ok(result)
@@ -181,9 +182,10 @@ fn analyze_file(mut reader: FlacReader<fs::File>) -> claxon::Result<TrackResult>
         meters[0].as_100ms_windows(),
         meters[1].as_100ms_windows(),
     );
+    let gated_power = bs1770::gated_mean(zipped.as_ref()).unwrap_or(Power(0.0));
 
     let result = TrackResult {
-        gated_power: bs1770::gated_mean(zipped.as_ref()),
+        gated_power: gated_power,
         windows: zipped,
         reader: reader,
     };
